@@ -488,3 +488,6 @@ $RECYCLE.BIN/
 # aspire publish -p docker-compose output — regenerate from AppHost, don't hand-edit or commit
 # (the .env file in there holds local secret values for whoever runs it)
 /docker/
+
+# aspire deploy's generated Bicep/compose artifacts — regenerate, don't commit
+src/AppHost/aspire-output/

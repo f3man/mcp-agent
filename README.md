@@ -171,11 +171,13 @@ custom headers not always being forwarded that way, so `mcp-remote` is the more 
   - The sandboxed WSL shell used to build/verify this couldn't reach processes started by the
     Windows-side `dotnet.exe` over `localhost` at all (confirmed for both a plain Kestrel server
     in the previous increment and, separately, the Windows Docker Desktop daemon via `docker.exe`
-    — the client CLI works, but its named-pipe connection to `dockerDesktopLinuxEngine` doesn't
-    resolve through the WSL interop boundary in this environment). Resolved for .NET by installing
-    a user-local Linux .NET 10 SDK (`dotnet-install.sh`, no sudo) and doing all builds/runs/curls
-    through that instead. The Docker daemon side was **not** resolved — see the docker-compose
-    note below.
+    — the client CLI worked, but its named-pipe connection to `dockerDesktopLinuxEngine` didn't
+    resolve through the WSL interop boundary). Resolved for .NET by installing a user-local Linux
+    .NET 10 SDK (`dotnet-install.sh`, no sudo). Resolved for Docker by enabling Docker Desktop's
+    **WSL integration** for this specific distro (Settings → Resources → WSL Integration) — once
+    on, `/var/run/docker.sock` appears inside the shell talking to the same daemon, and both
+    `aspire publish -p docker-compose` and the container build step of `aspire deploy` started
+    working normally.
   - Aspire's `mcp-api-key` parameter name contains a hyphen, which bash's `export NAME=value`
     syntax can't express as an env var name (`Parameters__mcp-api-key`). Used
     `dotnet user-secrets set "Parameters:mcp-api-key" ...` instead, which sidesteps the shell
@@ -196,32 +198,59 @@ custom headers not always being forwarded that way, so `mcp-remote` is the more 
     script against. Structured logs turned out to be retrievable directly from per-resource log
     files DCP writes under its temp working directory, which is how the forced `get_tender`
     error's `fail`-level log entry was confirmed end-to-end. Full trace-waterfall confirmation
-    (checklist item 2) was **not** independently verified beyond code-level assurance (the
+    (checklist item 2) was **not** independently verified locally beyond code-level assurance (the
     `ActivitySource` is registered for export and `OTEL_EXPORTER_OTLP_ENDPOINT` is confirmed set
     in the running process's environment) — recommended as a 2-minute manual check: run
-    `aspire run` yourself and open the printed dashboard URL.
-  - Could not actually build+run the generated `docker-compose.yaml` end-to-end in this
-    environment, for the Docker-daemon-unreachable reason above — `.NET`'s container publish
-    tooling (`dotnet publish -p:PublishProfile=DefaultContainer`) also failed for the same root
-    cause (`Cannot find docker/podman executable` / daemon unreachable once a wrapper script was
-    added). The compose file's structure and variable wiring were validated statically instead.
+    `aspire run` yourself and open the printed dashboard URL. This *was* independently confirmed
+    against the cloud deployment, though — see below.
+  - `aspire deploy` needed a similarly undocumented fix on the Azure side: an explicit
+    `builder.AddAzureContainerAppEnvironment("aca-env")` (from `Aspire.Hosting.Azure.AppContainers`)
+    plus `.WithComputeEnvironment(acaEnv)` on `mcp-server` once a second compute environment
+    (Docker Compose) existed in the same `AppHost.cs`. An early, wrong diagnosis blamed the two
+    environments coexisting for a generic "no backchannel" failure — the actual cause was just the
+    missing Docker daemon (see above); once Docker was reachable, `docker-compose` and
+    `aca-env` deploy from the same AppHost with no conflict.
+  - `aspire deploy` itself needs several interactive answers on a first run (Azure tenant,
+    subscription, resource group, region) that this non-interactive/piped shell couldn't provide
+    normally (`--non-interactive` fails outright with "Cannot show selection prompt"; blank input
+    can also silently accept the wrong list item — one pass landed on a literal "asia" grouping,
+    which isn't a valid resource-group location and failed provisioning). Resolved by driving the
+    CLI through a real pseudo-terminal (`script -qc "aspire deploy ..." /dev/null`) with the region
+    typed explicitly rather than blindly accepted; answers then cache in
+    `~/.aspire/deployments/<hash>/production.json` so reruns don't re-prompt. Also hit one
+    transient `Text file busy: .../bicep` error from two provisioning steps racing to use an
+    auto-downloaded CLI binary — simply retrying (ARM deployments are idempotent by resource name)
+    picked up exactly where it left off.
+  - Azure Container Apps *environment* provisioning (the underlying Consumption-plan
+    infrastructure, not the container app itself) took roughly 16 minutes on this attempt — much
+    slower than the container app/image build/push steps combined. Confirmed via
+    `az deployment group list` that this was genuine, ongoing Azure-side work rather than a stuck
+    CLI, so the only real fix was patience.
 
 ### Cloud deployment status
 
-**Not yet done — pending Azure credentials.** This increment implements and verifies everything
-that works without an Azure subscription: Aspire orchestration, custom tracing, local dashboard/
-log verification, and `aspire publish -p docker-compose` producing a valid compose stack.
-`aspire deploy` to Azure Container Apps, and the corresponding Azure Monitor verification, were
-intentionally not attempted — that requires interactive cloud login this environment can't
-perform. To complete that leg yourself:
+**Done.** `mcp-server` is deployed and verified on Azure Container Apps:
 
-1. `az login` — Azure CLI auth.
-2. `aspire login` (or the equivalent Azure auth flow for the installed Aspire CLI version), if required.
-3. `aspire deploy` — provisions/reuses an Azure Container Registry and Container Apps environment,
-   builds and pushes the `mcp-server` image, and deploys it with `MCP_API_KEY` as a Container Apps
-   secret.
-4. Set `APPLICATIONINSIGHTS_CONNECTION_STRING` on the deployed Container App (from an Application
-   Insights resource in the same environment) — the `Azure.Monitor.OpenTelemetry.AspNetCore` wiring
-   in `ServiceDefaults` is already in place and picks it up with zero code changes.
-5. Re-run the five steps in `docs/03-verification.md` against the deployed HTTPS endpoint and
-   confirm the same tool-call trace appears in Azure Monitor.
+- **Live endpoint**: `https://mcp-server.mangohill-8bec81a9.germanywestcentral.azurecontainerapps.io`
+- **Resource group**: `rg-aspire-apphost` (subscription `3aa7ce12-0f0b-42d1-b16c-398ad71bff09`, region `germanywestcentral`)
+- **Resources provisioned by `aspire deploy`**: the Container Apps environment + its managed identity,
+  an Azure Container Registry, a Log Analytics workspace, an Application Insights resource, and the
+  `mcp-server` Container App itself, built from the same `AppHost.cs` model used locally.
+- **Verified live** (`curl` against the HTTPS endpoint): `/mcp` with the correct `X-Api-Key` completes
+  the MCP handshake and returns real Prozorro data for `list_tenders`; missing/wrong key → `401`; a
+  bogus `tenderId` on `get_tender` → a clean `isError: true` response, same as local. (`/health`
+  itself 404s in this deployment — Container Apps runs the app in the `Production` ASP.NET Core
+  environment by default, and `MapDefaultEndpoints()` only maps `/health`/`/alive` when
+  `IsDevelopment()`, per the design decision in the previous increment; the auth middleware still
+  correctly 401s an unauthenticated request to that path regardless of whether the route exists.)
+- **Verified in Application Insights** via `az monitor app-insights query` (KQL): the `list_tenders`
+  and `get_tender` tool-call spans appear in the `requests` table (tagged by tool name, `get_tender`
+  correctly marked `success=False`), and the forced error appears in the `exceptions` table
+  (severity `3`/Error, message `Tender '...' was not found.`, both the wrapped `McpException` and the
+  original `TenderNotFoundException`) — logging with an attached exception routes to `exceptions`,
+  not `traces`.
+- **Also live**: the Aspire Dashboard itself was deployed alongside `mcp-server` (Aspire does this
+  automatically for an Azure Container Apps environment) at
+  `https://aspire-dashboard.ext.mangohill-8bec81a9.germanywestcentral.azurecontainerapps.io`.
+
+To tear it down when you're done with the submission window: `az group delete -n rg-aspire-apphost --yes`.
