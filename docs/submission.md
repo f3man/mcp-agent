@@ -1,5 +1,7 @@
 # Звіт про виконання завдання: MCP-сервер
 
+Репозиторій: https://github.com/f3man/mcp-agent/tree/task-1
+
 ## Загальний опис
 
 Було написано свій власний MCP-сервер (`src/McpServer`, ASP.NET Core / .NET 10). Він працює над
@@ -83,9 +85,8 @@
 `aspire run`, все те саме (трейси кожного виклику інструмента, метрики, логи) вже доступне без
 жодних додаткових налаштувань — просто в Aspire Dashboard замість Application Insights.
 
-> 📸 **Рис. 7.** Aspire Dashboard при локальному запуску (`aspire run`) → вкладка «Traces» —
-> трейс виклику інструмента (наприклад, `list_tenders`), схожий на той, що видно в Application
-> Insights у хмарі.
+> ![img_8.png](img_8.png)    
+> 📸 **Рис. 2.** Aspire Dashboard при локальному запуску (`aspire run`) → вкладка «Traces».
 
 ### Авторизація
 
@@ -102,7 +103,7 @@
 **1. Сервер запускається.**
 
 > ![img_1.png](img_1.png)    
-> 📸 **Рис. 2.** Azure Portal → Container App `mcp-server` → вкладка «Overview» — статус «Running».
+> 📸 **Рис. 3.** Azure Portal → Container App `mcp-server` → вкладка «Overview» — статус «Running».
 
 **2. Авторизований клієнт успішно підключається.**
 
@@ -111,7 +112,7 @@
 суми, регіони).
 
 > ![img_2.png](img_2.png)
-> 📸 **Рис. 3.** результат виклику інструмента (Bruno) — видно дані тендерів у відповіді, і код відповіді `200`.
+> 📸 **Рис. 4.** результат виклику інструмента (Bruno) — видно дані тендерів у відповіді, і код відповіді `200`.
 
 **3. Запит без авторизації відхиляється.**
 
@@ -123,7 +124,7 @@ curl -i https://mcp-server.mangohill-8bec81a9.germanywestcentral.azurecontainera
 Так само і з неправильним ключем. Перевірено і локально, і на хмарній адресі.
 
 > ![img_3.png](img_3.png)
-> 📸 **Рис. 4.** та ж перевірка у Bruno — запит без заголовка `X-Api-Key`.
+> 📸 **Рис. 5.** та ж перевірка у Bruno — запит без заголовка `X-Api-Key`.
 
 **4. Логування та моніторинг працюють правильно.**
 
@@ -138,12 +139,12 @@ curl -i https://mcp-server.mangohill-8bec81a9.germanywestcentral.azurecontainera
   (`McpException`).
 
 > ![img_4.png](img_4.png) ![img_5.png](img_5.png)    
-> 📸 **Рис 5.** Application Insights (ресурс `appinsights-a64bagvoha2yy`, група
+> 📸 **Рис 6.** Application Insights (ресурс `appinsights-a64bagvoha2yy`, група
 > `rg-aspire-apphost`) → «Transaction search».
 
 
 > ![img_6.png](img_6.png)![img_7.png](img_7.png)    
-> 📸 **Рис. 6.** Application Insights → «Exceptions» — запис
+> 📸 **Рис. 7.** Application Insights → «Exceptions» — запис
 > `Tender '...' was not found.`.
 
 ### Висновки
