@@ -1,0 +1,6 @@
+{
+  "version": "1",
+  "name": "Tender Watch — MCP Server",
+  "type": "collection",
+  "ignore": ["node_modules", ".git"]
+}

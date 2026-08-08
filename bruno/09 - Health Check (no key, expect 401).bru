@@ -1,0 +1,17 @@
+meta {
+  name: 09 - Health Check (no key, expect 401)
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+
+docs {
+  No X-Api-Key header sent — expect 401 with {"error":"invalid or missing api key"}.
+  (/health only exists when the server is run in the Development environment, e.g. via
+  `aspire run` — see docs/02-aspire-and-observability.md.)
+}

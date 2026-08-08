@@ -1,0 +1,19 @@
+meta {
+  name: 10 - Health Check (with key, expect 200)
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+}
+
+docs {
+  Correct key sent — expect 200 "Healthy".
+}

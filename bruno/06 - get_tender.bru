@@ -1,0 +1,34 @@
+meta {
+  name: 06 - get_tender
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/mcp
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+  Accept: application/json, text/event-stream
+  Mcp-Session-Id: {{sessionId}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "get_tender",
+      "arguments": { "tenderId": "{{tenderId}}" }
+    }
+  }
+}
+
+docs {
+  Uses the `tenderId` variable, auto-filled by "04 - list_tenders" — run that first, or paste a
+  real id manually. Expect full detail including `eligibilityText`.
+}

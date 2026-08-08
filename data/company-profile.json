@@ -1,0 +1,13 @@
+{
+  "companyName": "Example Industrial Supply LLC",
+  "categories": ["IT services", "office equipment", "medical supplies"],
+  "certifications": ["ISO 9001", "local SME registration"],
+  "regionsServed": ["Kyiv", "Kyiv Oblast", "Lviv Oblast"],
+  "minProjectValue": 50000,
+  "maxProjectValue": 2000000,
+  "currency": "UAH",
+  "pastContracts": [
+    { "category": "IT services", "year": 2024, "outcome": "won" },
+    { "category": "medical supplies", "year": 2023, "outcome": "lost", "reason": "price" }
+  ]
+}

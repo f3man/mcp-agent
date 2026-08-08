@@ -1,0 +1,33 @@
+meta {
+  name: 05 - search_tenders
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/mcp
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+  Accept: application/json, text/event-stream
+  Mcp-Session-Id: {{sessionId}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "search_tenders",
+      "arguments": { "keywords": "картридж", "limit": 5 }
+    }
+  }
+}
+
+docs {
+  Free-text search across title and category. Try other keywords, e.g. "медичн" or "ремонт".
+}

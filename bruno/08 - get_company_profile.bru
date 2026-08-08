@@ -1,0 +1,32 @@
+meta {
+  name: 08 - get_company_profile
+  type: http
+  seq: 8
+}
+
+post {
+  url: {{baseUrl}}/mcp
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+  Accept: application/json, text/event-stream
+  Mcp-Session-Id: {{sessionId}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "tools/call",
+    "params": {
+      "name": "get_company_profile"
+    }
+  }
+}
+
+docs {
+  No params. Returns the contents of data/company-profile.json.
+}

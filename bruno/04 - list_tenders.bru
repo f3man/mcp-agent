@@ -1,0 +1,54 @@
+meta {
+  name: 04 - list_tenders
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/mcp
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+  Accept: application/json, text/event-stream
+  Mcp-Session-Id: {{sessionId}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "list_tenders",
+      "arguments": { "limit": 5 }
+    }
+  }
+}
+
+script:post-response {
+  // Grab a real tender id out of the response so "06 - get_tender" has something valid to call
+  // without manual copy-pasting — the MCP payload is SSE-wrapped, and the tool result itself is a
+  // JSON string nested inside the content block, so this unwraps both layers.
+  try {
+    const raw = res.getBody();
+    const text = typeof raw === "string" ? raw : JSON.stringify(raw);
+    const match = text.match(/data:\s*(\{.*\})/s);
+    const envelope = JSON.parse(match[1]);
+    const tenders = JSON.parse(envelope.result.content[0].text);
+    if (tenders.length > 0) {
+      bru.setVar("tenderId", tenders[0].id);
+    }
+  } catch (e) {
+    // Live data or transport shape changed — "06 - get_tender" falls back to its placeholder id.
+  }
+}
+
+docs {
+  Calls the real Prozorro API — expect a handful of recent, real tenders back. Try tweaking
+  `arguments` to `{ "status": "active", "region": "Київ" }` etc.
+
+  Also stores the first result's id into the `tenderId` variable for "06 - get_tender".
+}

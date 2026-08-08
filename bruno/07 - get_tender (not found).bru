@@ -1,0 +1,35 @@
+meta {
+  name: 07 - get_tender (not found)
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/mcp
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+  Accept: application/json, text/event-stream
+  Mcp-Session-Id: {{sessionId}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "tools/call",
+    "params": {
+      "name": "get_tender",
+      "arguments": { "tenderId": "00000000000000000000000000000000" }
+    }
+  }
+}
+
+docs {
+  Deliberately bogus id — expect a clean MCP tool error (`"isError": true` with a "was not found"
+  message), not a dropped connection or a stack trace. This is also what shows up as a `fail`-level
+  structured log entry when running under Aspire.
+}

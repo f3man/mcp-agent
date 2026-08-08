@@ -1,0 +1,29 @@
+meta {
+  name: 03 - List Tools
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/mcp
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+  Accept: application/json, text/event-stream
+  Mcp-Session-Id: {{sessionId}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/list"
+  }
+}
+
+docs {
+  Expect exactly 4 tools back: list_tenders, get_tender, search_tenders, get_company_profile.
+}

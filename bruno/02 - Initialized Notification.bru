@@ -1,0 +1,30 @@
+meta {
+  name: 02 - Initialized Notification
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/mcp
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+  Accept: application/json, text/event-stream
+  Mcp-Session-Id: {{sessionId}}
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "method": "notifications/initialized"
+  }
+}
+
+docs {
+  Run after Initialize. Completes the MCP handshake for this session — expect a bare `202
+  Accepted` with no body. Required before `tools/list`/`tools/call` will work on some clients;
+  harmless if the server doesn't require it.
+}

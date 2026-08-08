@@ -1,0 +1,48 @@
+meta {
+  name: 01 - Initialize
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/mcp
+  body: json
+  auth: none
+}
+
+headers {
+  X-Api-Key: {{apiKey}}
+  Accept: application/json, text/event-stream
+}
+
+body:json {
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+      "protocolVersion": "2025-06-18",
+      "capabilities": {},
+      "clientInfo": { "name": "bruno", "version": "1.0.0" }
+    }
+  }
+}
+
+script:post-response {
+  // MCP Streamable HTTP is session-based: the server hands back an Mcp-Session-Id header on
+  // initialize, which every subsequent request in this collection must echo back. Bruno's
+  // res.getHeader() looks up the lowercased key (headers are normalized by the underlying HTTP
+  // client) — "Mcp-Session-Id" won't match, "mcp-session-id" will.
+  const sessionId = res.getHeader("mcp-session-id");
+  if (sessionId) {
+    bru.setVar("sessionId", sessionId);
+  }
+}
+
+docs {
+  Run this first. Starts an MCP session and stores the returned `Mcp-Session-Id` in the
+  `sessionId` collection variable, used by every request below.
+
+  Response comes back as `text/event-stream` (one `event: message` / `data: {...}` block) — that's
+  the MCP Streamable HTTP transport, not an error.
+}
