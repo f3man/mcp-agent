@@ -33,4 +33,42 @@ if (builder.ExecutionContext.IsPublishMode)
         .WithComputeEnvironment(acaEnv);
 }
 
+// Task 2 — state store for the loop orchestrator. RunAsEmulator() switches to Azurite locally and
+// to the real Azure Storage account when publishing/deploying, automatically — unlike App
+// Insights, this does NOT need IsPublishMode gating (Aspire's own docs: calling RunAsEmulator
+// doesn't affect the publishing manifest).
+var storage = builder.AddAzureStorage("storage").RunAsEmulator();
+var tenderTable = storage.AddTables("tender-state");
+
+// Unlike mcp-api-key (a hard requirement — McpServer fails fast without it), these three are
+// genuinely optional at the app layer: LoopOrchestrator/Program.cs logs a warning and degrades
+// gracefully (VerifyStage forces "uncertain" without embeddings, etc. — see docs/task-2 plan §8).
+// A plain `AddParameter(..., secret: true)` with no configured value stays "ValueMissing" forever
+// and blocks the referencing project resource from ever starting (observed directly: mcp-server
+// stayed stuck in "Starting" — never even spawning a process — until mcp-api-key resolved). Reading
+// the config value ourselves with a "" fallback keeps these resolvable (Running immediately) so
+// loop-orchestrator can start without them, while a real secret set via `dotnet user-secrets`
+// still flows through unchanged when present.
+var anthropicApiKey = builder.AddParameter("anthropic-api-key", builder.Configuration["Parameters:anthropic-api-key"] ?? "", secret: true);
+var slackWebhookUrl = builder.AddParameter("slack-webhook-url", builder.Configuration["Parameters:slack-webhook-url"] ?? "", secret: true);
+var openAiApiKey = builder.AddParameter("openai-api-key", builder.Configuration["Parameters:openai-api-key"] ?? "", secret: true);
+
+var loopOrchestrator = builder.AddProject<Projects.LoopOrchestrator>("loop-orchestrator")
+    .WithReference(mcpServer)   // service discovery resolves "mcp-server" to the real endpoint, no hardcoded URL
+    .WithReference(tenderTable)
+    .WithEnvironment("MCP_API_KEY", apiKey)
+    .WithEnvironment("ANTHROPIC_API_KEY", anthropicApiKey)
+    .WithEnvironment("SLACK_WEBHOOK_URL", slackWebhookUrl)
+    .WithEnvironment("OPENAI_API_KEY", openAiApiKey)
+    .WithExternalHttpEndpoints() // so /run-now is reachable for testing/demo, same as mcp-server
+    .WaitFor(mcpServer)
+    .WaitFor(tenderTable);
+
+if (builder.ExecutionContext.IsPublishMode)
+{
+    loopOrchestrator
+        .WithReference(appInsights)
+        .WithComputeEnvironment(acaEnv);
+}
+
 builder.Build().Run();

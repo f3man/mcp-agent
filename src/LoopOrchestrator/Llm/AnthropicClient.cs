@@ -1,0 +1,87 @@
+using System.Net.Http.Json;
+using System.Text.Json;
+
+namespace LoopOrchestrator.Llm;
+
+/// <summary>
+/// Hand-rolled Anthropic Messages API client — no Anthropic SDK dependency, matching this
+/// codebase's existing style (McpServer/Tenders/ProzorroClient.cs also hand-rolls its upstream
+/// client rather than pulling in a vendor SDK). BaseAddress ("https://api.anthropic.com/") and the
+/// x-api-key/anthropic-version default headers are configured on the injected HttpClient in
+/// Program.cs, the same pattern ProzorroClient uses for its own upstream call.
+/// </summary>
+public sealed class AnthropicClient(HttpClient httpClient, ILogger<AnthropicClient> logger)
+{
+    // Dated model id per Anthropic's current naming convention for Claude Haiku 4.5 — fast/cheap,
+    // appropriate for a high-volume, low-complexity classify/verify/summarize workload per tender.
+    private const string Model = "claude-haiku-4-5-20251001";
+
+    /// <summary>One structured-output call (Stages 2/3 — classify, verify). Returns the raw JSON
+    /// text from the response's first text content block — callers that need typed results should
+    /// go through CompleteStructuredAsync instead, which adds the retry-on-parse-failure loop.</summary>
+    public Task<string> CompleteJsonAsync(
+        string systemPrompt, string userMessage, JsonElement schema, int maxTokens, CancellationToken cancellationToken) =>
+        SendAsync(systemPrompt, userMessage, new AnthropicOutputConfig(new AnthropicJsonFormat("json_schema", schema)), maxTokens, cancellationToken);
+
+    /// <summary>Plain-text completion, no output_config (Stage 5 — handoff summarizer). The prompt
+    /// book requires plain text output for this stage specifically ("no JSON, no markdown headers
+    /// — this goes straight into a Slack message"), so forcing a JSON schema here would contradict
+    /// the prompt's own instructions.</summary>
+    public Task<string> CompletePlainTextAsync(
+        string systemPrompt, string userMessage, int maxTokens, CancellationToken cancellationToken) =>
+        SendAsync(systemPrompt, userMessage, outputConfig: null, maxTokens, cancellationToken);
+
+    /// <summary>Calls CompleteJsonAsync and deserializes the result as T, retrying the whole LLM
+    /// call (not just the parse) on failure — defense-in-depth per the prompt book's guardrail;
+    /// with output_config.format already schema-guaranteeing the shape, a parse failure here
+    /// should be rare (a network hiccup returning a truncated body, etc.), not the common case.</summary>
+    public async Task<T> CompleteStructuredAsync<T>(
+        string systemPrompt, string userMessage, JsonElement schema, int maxTokens,
+        CancellationToken cancellationToken, int maxAttempts = 3)
+    {
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var text = await CompleteJsonAsync(systemPrompt, userMessage, schema, maxTokens, cancellationToken);
+            try
+            {
+                return JsonSerializer.Deserialize<T>(text) ?? throw new JsonException("Deserialized to null.");
+            }
+            catch (JsonException ex)
+            {
+                lastError = ex;
+                logger.LogWarning(ex,
+                    "LLM structured-output parse failed on attempt {Attempt}/{MaxAttempts}. Raw text: {Text}",
+                    attempt, maxAttempts, text);
+            }
+        }
+
+        throw new InvalidOperationException($"LLM failed to produce parseable JSON after {maxAttempts} attempts.", lastError);
+    }
+
+    private async Task<string> SendAsync(
+        string systemPrompt, string userMessage, AnthropicOutputConfig? outputConfig, int maxTokens, CancellationToken cancellationToken)
+    {
+        var request = new AnthropicMessageRequest(
+            Model: Model,
+            MaxTokens: maxTokens,
+            System: systemPrompt,
+            Messages: [new AnthropicMessage("user", userMessage)],
+            OutputConfig: outputConfig);
+
+        using var response = await httpClient.PostAsJsonAsync("v1/messages", request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogError("Anthropic API returned {StatusCode}: {Body}", (int)response.StatusCode, body);
+            throw new InvalidOperationException($"Anthropic API returned {(int)response.StatusCode}: {body}");
+        }
+
+        var payload = JsonSerializer.Deserialize<AnthropicMessageResponse>(body)
+            ?? throw new InvalidOperationException("Anthropic API returned an empty response body.");
+
+        var text = payload.Content.FirstOrDefault(b => b.Type == "text")?.Text;
+        return text ?? throw new InvalidOperationException("Anthropic API response had no text content block.");
+    }
+}

@@ -1,10 +1,12 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/AppHost/AppHost.csproj" />
+    <Project Path="src/LoopOrchestrator/LoopOrchestrator.csproj" />
     <Project Path="src/McpServer/McpServer.csproj" />
     <Project Path="src/ServiceDefaults/ServiceDefaults.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/LoopOrchestrator.Tests/LoopOrchestrator.Tests.csproj" />
     <Project Path="tests/McpServer.Tests/McpServer.Tests.csproj" />
   </Folder>
 </Solution>

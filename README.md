@@ -1,32 +1,64 @@
-# Tender Watch — MCP Server (Task 1)
+# Tender Watch
 
-A .NET Aspire solution exposing a read-only MCP server over Ukraine's public Prozorro
-procurement feed (the "national e-procurement feed"), built as Part 1 of the Tender Watch
-course project. See `docs/00-overview.md` for the full project scope and `docs/` for the
-per-increment specs this implements.
+A .NET Aspire solution with two cooperating services: **`mcp-server`**, a read-only MCP server
+over Ukraine's public Prozorro procurement feed, and **`loop-orchestrator`**, an autonomous agent
+loop that discovers new tenders through it, screens them against a company profile, checks
+eligibility against qualification docs (RAG), and escalates anything worth a human's attention to
+Slack. Built as a course project — see `docs/initial-specs/00-overview.md` for the full scope and
+`docs/initial-specs/task-1`/`docs/initial-specs/task-2` for the per-increment specs this
+implements.
 
 ## What's here
 
 ```
 TenderWatch.slnx
 ├── src/
-│   ├── McpServer/        # the MCP server itself — tools, auth, Prozorro client (docs/01-mcp-server.md)
-│   ├── ServiceDefaults/   # shared OTel/health-checks/resilience wiring (docs/02-aspire-and-observability.md)
-│   └── AppHost/           # Aspire orchestrator — source of truth for local dev + publish
-├── tests/McpServer.Tests/ # 33 xUnit tests over the server's pure logic
-└── data/company-profile.json
+│   ├── McpServer/          # MCP server — tools, auth, Prozorro client
+│   ├── LoopOrchestrator/   # discover → classify → verify → persist → handoff loop
+│   ├── ServiceDefaults/    # shared OTel/health-checks/resilience wiring
+│   └── AppHost/            # Aspire orchestrator — source of truth for local dev + publish
+├── tests/
+│   ├── McpServer.Tests/          # 33 xUnit tests over the server's pure logic
+│   └── LoopOrchestrator.Tests/   # 28 xUnit tests over the loop's pure logic
+├── data/
+│   ├── company-profile.json   # fictional supplier profile used by both services
+│   └── qualification-docs/    # certifications/financial-capacity/past-bids/exclusions — RAG source
+└── docs/
+    ├── prompt-book.md                     # the loop's 3 system prompts + guardrails
+    ├── conclusions-1st-iteration.md        # MCP server: deployment, auth, monitoring, difficulties
+    ├── conclusions-2nd-iteration.md        # loop orchestrator: live verification, bugs found & fixed
+    └── initial-specs/                      # the original per-increment assignment specs
 ```
 
 ## Running it
 
 ```bash
 dotnet user-secrets set "Parameters:mcp-api-key" "local-dev-key" --project src/AppHost
+
+# Optional — unlocks the loop's LLM/RAG/Slack stages, see "The autonomous loop" below
+dotnet user-secrets set "Parameters:anthropic-api-key" "..." --project src/AppHost
+dotnet user-secrets set "Parameters:openai-api-key" "..." --project src/AppHost
+dotnet user-secrets set "Parameters:slack-webhook-url" "..." --project src/AppHost
+
 aspire run --project src/AppHost/AppHost.csproj
 ```
 
-This starts `mcp-server` and opens the Aspire Dashboard (traces, metrics, structured logs).
-`MCP_API_KEY` is injected from the `mcp-api-key` parameter — every MCP request (and `/health`)
-requires the matching `X-Api-Key` header.
+This starts `mcp-server`, `loop-orchestrator`, Azure Table Storage (Azurite locally), and opens
+the Aspire Dashboard (traces, metrics, structured logs). `MCP_API_KEY` is injected from the
+`mcp-api-key` parameter — every MCP request (and `/health`) requires the matching `X-Api-Key`
+header.
+
+The three loop secrets above are optional: `loop-orchestrator` still starts and runs
+Discover/Classify/idempotency without them, degrading gracefully per missing credential (see
+"The autonomous loop" below).
+
+> **Known environment issue**: on some sandboxed/virtualized Linux setups (WSL2 included),
+> `aspire run`'s CLI wrapper can crash immediately on launch due to an unresolved upstream Aspire
+> orphan-detector bug ([dotnet/aspire#8244](https://github.com/dotnet/aspire/issues/8244)). If
+> that happens, run the AppHost directly instead — same orchestration, minus the CLI's wrapper:
+> ```bash
+> ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/AppHost --no-launch-profile
+> ```
 
 Need a standalone `docker-compose.yml` (no Aspire CLI required to run it)?
 
@@ -36,7 +68,7 @@ aspire publish -p docker-compose -o ./docker
 
 Regenerate rather than hand-edit the output — change `AppHost.cs`/`ServiceDefaults` and republish.
 
-## Interacting with the server
+## Interacting with the MCP server
 
 Every request — MCP calls and `/health`/`/alive` alike — needs an `X-Api-Key` header matching
 whatever `MCP_API_KEY`/`mcp-api-key` was configured with. Find the port from the console output
@@ -144,8 +176,37 @@ Some newer Claude Desktop builds also accept a server entry shaped like
 `mcp-remote` — worth trying first if your version supports it, but there are recurring reports of
 custom headers not always being forwarded that way, so `mcp-remote` is the more reliable option.
 
+## The autonomous loop
+
+`loop-orchestrator` runs discover → classify → verify → persist → handoff on a timer
+(`LOOP_INTERVAL_MINUTES`, default 360 minutes) and on demand:
+
+```bash
+curl -X POST http://localhost:<port>/run-now
+```
+
+- **Discover** — pulls active tenders from `mcp-server`; Table Storage's seen-tender-ID set is the
+  sole idempotency guard, so reruns never reprocess the same tender.
+- **Classify** — an LLM call (needs `ANTHROPIC_API_KEY`) judges relevance against
+  `data/company-profile.json`.
+- **Verify** — RAG over `data/qualification-docs/*.md` (embeddings need `OPENAI_API_KEY`) plus an
+  LLM call decides eligibility, citing an actual clause from the tender's own text.
+- **Persist** — every outcome is written to Table Storage (Azurite locally, real Storage when
+  deployed).
+- **Handoff** — escalates `uncertain` verdicts and high-value `eligible` ones to Slack (needs
+  `SLACK_WEBHOOK_URL`), with an LLM-written brief.
+
+Missing any of the three credentials degrades gracefully rather than crashing — Classify/Verify
+just can't run without the LLM key, and Verify falls back to `uncertain` without embeddings — see
+`docs/conclusions-2nd-iteration.md` for exactly what was confirmed live (including a real message
+delivered to Slack) and the real bugs this testing found and fixed along the way.
+
 ## Conclusions
 
-Moved to [`docs/conclusions-1st-iteration.md`](docs/conclusions-1st-iteration.md) — deployment
-method and rationale, auth mechanism, logging/monitoring setup, difficulties encountered, and the
-current cloud deployment status (live endpoint, resources, verification results).
+- [`docs/conclusions-1st-iteration.md`](docs/conclusions-1st-iteration.md) — the MCP server:
+  deployment method and rationale, auth mechanism, logging/monitoring setup, difficulties
+  encountered, and the current cloud deployment status (live endpoint, resources, verification
+  results).
+- [`docs/conclusions-2nd-iteration.md`](docs/conclusions-2nd-iteration.md) — the loop orchestrator:
+  what was verified live end-to-end against real data and real credentials, and the real bugs
+  found and fixed while confirming it.

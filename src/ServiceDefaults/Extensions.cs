@@ -69,6 +69,11 @@ public static class Extensions
                     // to avoid a circular project reference (McpServer -> ServiceDefaults -> McpServer);
                     // the two must be kept in sync by convention if either one changes.
                     .AddSource("TenderWatch.McpServer.Tools")
+                    // Custom spans wrapping each of the 5 loop stages + LLM calls — see
+                    // LoopOrchestrator/Telemetry/LoopTelemetry.cs. Same literal-string convention
+                    // as above, for the same circular-reference reason (LoopOrchestrator also
+                    // references this ServiceDefaults project).
+                    .AddSource("TenderWatch.LoopOrchestrator.Stages")
                     .AddAspNetCoreInstrumentation(tracing =>
                         // Exclude health check requests from tracing
                         tracing.Filter = context =>
