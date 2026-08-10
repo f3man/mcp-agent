@@ -8,7 +8,7 @@ namespace LoopOrchestrator.Loop;
 public sealed record RunResult(bool Started, int Processed, int Skipped, int Verified, int HandedOff, int Failed = 0);
 
 /// <summary>
-/// The actual 5-stage pipeline (Discover → Classify → Verify → Persist → Handoff), called by both
+/// The actual 4-stage pipeline (Discover → Assess → Persist → Handoff), called by both
 /// LoopBackgroundWorker's timer and the /run-now endpoint. Registered Scoped — see
 /// Mcp/McpTenderClient.cs's remarks on why a fresh McpClient session per run (rather than one for
 /// the whole process lifetime) is the better fit here; ASP.NET Core creates a scope per HTTP
@@ -19,8 +19,7 @@ public sealed class LoopRunner(
     IMcpTenderClient mcpClient,
     ITenderStateStore stateStore,
     DiscoverStage discoverStage,
-    ClassifyStage classifyStage,
-    VerifyStage verifyStage,
+    AssessStage assessStage,
     PersistStage persistStage,
     HandoffStage handoffStage,
     LoopOptions options,
@@ -116,55 +115,53 @@ public sealed class LoopRunner(
     {
         var firstSeenAt = DateTimeOffset.UtcNow; // stable across every persist call below for this tender
 
-        var classifyResult = await classifyStage.RunAsync(tender, companyProfile, cancellationToken);
+        var assessResult = await assessStage.RunAsync(tender, companyProfile, cancellationToken);
 
-        if (!classifyResult.Relevant)
+        if (!assessResult.Relevant)
         {
             await persistStage.RunAsync(
                 new TenderReviewRecord(
-                    tender.Id, firstSeenAt, TenderReviewStatus.Skipped, classifyResult.RelevanceScore,
+                    tender.Id, firstSeenAt, TenderReviewStatus.Skipped, assessResult.RelevanceScore,
                     EligibilityVerdict: null, EligibilityRationale: null, HandoffSentAt: null, HumanDecision: null,
-                    Notes: classifyResult.Reason),
+                    Notes: assessResult.RelevanceReason),
                 cancellationToken);
             return TenderReviewStatus.Skipped;
         }
-
-        var verifyResult = await verifyStage.RunAsync(tender.Id, cancellationToken);
 
         // "limited" procurement method tenders can't realistically be bid on by an outside
-        // supplier regardless of eligibility — checked here, right after Verify (the earliest
+        // supplier regardless of eligibility — checked here, right after Assess (the earliest
         // point TenderDetail.ProcurementMethod is available), before any persist for this tender
         // and before ever reaching Handoff, so no LLM call or Slack noise is spent on one.
-        if (ProcurementMethodPolicy.IsExcluded(verifyResult.TenderDetail.ProcurementMethod))
+        if (ProcurementMethodPolicy.IsExcluded(assessResult.TenderDetail.ProcurementMethod))
         {
             await persistStage.RunAsync(
                 new TenderReviewRecord(
-                    tender.Id, firstSeenAt, TenderReviewStatus.Skipped, classifyResult.RelevanceScore,
-                    verifyResult.Verdict, verifyResult.Rationale, HandoffSentAt: null, HumanDecision: null,
-                    Notes: $"Excluded — procurementMethod={verifyResult.TenderDetail.ProcurementMethod} (invite-only, not biddable)."),
+                    tender.Id, firstSeenAt, TenderReviewStatus.Skipped, assessResult.RelevanceScore,
+                    assessResult.Verdict, assessResult.Rationale, HandoffSentAt: null, HumanDecision: null,
+                    Notes: $"Excluded — procurementMethod={assessResult.TenderDetail.ProcurementMethod} (invite-only, not biddable)."),
                 cancellationToken);
             return TenderReviewStatus.Skipped;
         }
 
-        // Interim persist right after Verify, before the Handoff decision — matches the spec's
+        // Interim persist right after Assess, before the Handoff decision — matches the spec's
         // stage ordering (Persist, then Handoff). The final persist below may overwrite Status.
         await persistStage.RunAsync(
             new TenderReviewRecord(
-                tender.Id, firstSeenAt, TenderReviewStatus.Verified, classifyResult.RelevanceScore,
-                verifyResult.Verdict, verifyResult.Rationale, HandoffSentAt: null, HumanDecision: null,
-                Notes: verifyResult.CitedClause),
+                tender.Id, firstSeenAt, TenderReviewStatus.Verified, assessResult.RelevanceScore,
+                assessResult.Verdict, assessResult.Rationale, HandoffSentAt: null, HumanDecision: null,
+                Notes: assessResult.CitedClause),
             cancellationToken);
 
         var handoffOutcome = await handoffStage.RunAsync(
-            verifyResult.TenderDetail, verifyResult.Verdict, verifyResult.Rationale, classifyResult.RelevanceScore,
+            assessResult.TenderDetail, assessResult.Verdict, assessResult.Rationale, assessResult.RelevanceScore,
             options.HandoffValueThreshold, cancellationToken);
 
         await persistStage.RunAsync(
             new TenderReviewRecord(
-                tender.Id, firstSeenAt, handoffOutcome.FinalStatus, classifyResult.RelevanceScore,
-                verifyResult.Verdict, verifyResult.Rationale, handoffOutcome.HandoffSentAt,
+                tender.Id, firstSeenAt, handoffOutcome.FinalStatus, assessResult.RelevanceScore,
+                assessResult.Verdict, assessResult.Rationale, handoffOutcome.HandoffSentAt,
                 HumanDecision: handoffOutcome.FinalStatus == TenderReviewStatus.HandedOff ? HumanDecisionStatus.Pending : null,
-                Notes: verifyResult.CitedClause),
+                Notes: assessResult.CitedClause),
             cancellationToken);
 
         return handoffOutcome.FinalStatus;

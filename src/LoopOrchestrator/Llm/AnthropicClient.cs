@@ -59,6 +59,73 @@ public sealed class AnthropicClient(HttpClient httpClient, ILogger<AnthropicClie
         throw new InvalidOperationException($"LLM failed to produce parseable JSON after {maxAttempts} attempts.", lastError);
     }
 
+    /// <summary>Real agentic tool use: Claude decides itself whether/how to call any of `tools`,
+    /// as many times as it needs (up to `maxIterations`), before producing a final plain-text
+    /// answer. Deliberately NOT combined with output_config.format/structured output in the same
+    /// call — this loop's job is the research phase; callers make a normal, separate
+    /// CompleteStructuredAsync call afterward (with this loop's findings folded into that call's
+    /// user message) to get a schema-guaranteed final verdict. Keeping the two mechanisms in
+    /// separate calls reuses CompleteStructuredAsync's existing, already-tested retry/schema
+    /// machinery unchanged, rather than depending on whether Anthropic's API cleanly supports
+    /// mixing tool-use and output_config in one request.</summary>
+    public async Task<AgenticResult> RunAgenticToolLoopAsync(
+        string systemPrompt, string initialUserMessage, IReadOnlyList<AnthropicTool> tools,
+        Func<string, JsonElement, CancellationToken, Task<string>> executeToolAsync,
+        int maxTokens, int maxIterations, CancellationToken cancellationToken)
+    {
+        var messages = new List<object> { new { role = "user", content = initialUserMessage } };
+        var toolCallsMade = new List<ToolCallRecord>();
+
+        for (var iteration = 1; iteration <= maxIterations; iteration++)
+        {
+            var request = new AnthropicAgenticRequest(Model, maxTokens, systemPrompt, messages, tools);
+            using var response = await httpClient.PostAsJsonAsync("v1/messages", request, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                logger.LogError("Anthropic API returned {StatusCode}: {Body}", (int)response.StatusCode, body);
+                throw new InvalidOperationException($"Anthropic API returned {(int)response.StatusCode}: {body}");
+            }
+
+            var payload = JsonSerializer.Deserialize<AnthropicMessageResponse>(body)
+                ?? throw new InvalidOperationException("Anthropic API returned an empty response body.");
+
+            var toolUseBlocks = payload.Content.Where(b => b.Type == "tool_use").ToList();
+            if (toolUseBlocks.Count == 0 || payload.StopReason != "tool_use")
+            {
+                var finalText = payload.Content.FirstOrDefault(b => b.Type == "text")?.Text ?? string.Empty;
+                return new AgenticResult(finalText, toolCallsMade);
+            }
+
+            // Echo the assistant's own turn back verbatim (Anthropic requires the tool_use blocks
+            // to appear in the conversation history before the matching tool_result), then one
+            // tool_result per tool_use, in the same order, in a single following user turn.
+            messages.Add(new
+            {
+                role = "assistant",
+                content = payload.Content.Select(b => b.Type == "tool_use"
+                    ? (object)new { type = "tool_use", id = b.Id, name = b.Name, input = b.Input }
+                    : new { type = "text", text = b.Text }),
+            });
+
+            var toolResults = new List<object>();
+            foreach (var block in toolUseBlocks)
+            {
+                var input = block.Input ?? JsonDocument.Parse("{}").RootElement;
+                var resultText = await executeToolAsync(block.Name!, input, cancellationToken);
+                toolCallsMade.Add(new ToolCallRecord(block.Name!, input, resultText));
+                toolResults.Add(new { type = "tool_result", tool_use_id = block.Id, content = resultText });
+            }
+            messages.Add(new { role = "user", content = toolResults });
+        }
+
+        logger.LogWarning(
+            "Agentic tool loop hit maxIterations={MaxIterations} without Claude finishing — " +
+            "returning what was accumulated so far rather than looping forever.", maxIterations);
+        return new AgenticResult(string.Empty, toolCallsMade);
+    }
+
     private async Task<string> SendAsync(
         string systemPrompt, string userMessage, AnthropicOutputConfig? outputConfig, int maxTokens, CancellationToken cancellationToken)
     {
@@ -85,3 +152,11 @@ public sealed class AnthropicClient(HttpClient httpClient, ILogger<AnthropicClie
         return text ?? throw new InvalidOperationException("Anthropic API response had no text content block.");
     }
 }
+
+/// <summary>What a RunAgenticToolLoopAsync call actually did — FinalText is Claude's concluding
+/// plain-text answer once it stopped requesting tools; ToolCallsMade is the full record of what
+/// was called and with what result, folded into the caller's follow-up structured-verdict prompt
+/// so the final schema-guaranteed answer can reference what was actually found.</summary>
+public sealed record AgenticResult(string FinalText, IReadOnlyList<ToolCallRecord> ToolCallsMade);
+
+public sealed record ToolCallRecord(string ToolName, JsonElement Input, string Result);

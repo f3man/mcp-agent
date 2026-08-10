@@ -7,54 +7,73 @@ This is the Part 2 "Prompt Book" deliverable. These are the **actual** prompts u
 ## Global guardrails (apply to every stage)
 
 1. Never take any action beyond read-only tender lookups and posting a Slack notification. There
-   is no submit/bid action exposed to the agent, and none should be added.
+   is no submit/bid action exposed to the agent, and none should be added. As of Assess (Prompt
+   1), the model has real, agentic access to two of those read-only lookups (`get_tender`,
+   `search_tenders` — the same MCP tools `mcp-server` exposes) and may call either itself, as many
+   times as it judges useful — but the tool surface handed to it is still exactly this same
+   read-only set, allow-listed in code (`Loop/Stages/AssessStage.cs`), never expanded by the model.
 2. Every eligibility verdict must cite a literal excerpt from the tender's own `eligibilityText`.
    If no relevant excerpt exists, the verdict must be `uncertain` — never fabricate a requirement.
 3. Escalate to a human (don't decide silently) whenever confidence is low or tender value exceeds
    the configured threshold.
 4. Every LLM call is logged as a span (prompt version, input, output) in the Aspire Dashboard /
-   Azure Monitor trace — for auditability.
-5. Loop runs are budget-capped (`LOOP_INTERVAL_MINUTES` prevents runaway frequency); if a single
-   run processes more than a sanity-check limit of tenders, log a warning and stop rather than
-   burning API budget silently.
+   Azure Monitor trace — for auditability. Assess's tool calls are recorded the same way, plus
+   folded into the transcript its own final structured-verdict call is given as context.
+5. Loop runs are budget-capped (`LOOP_INTERVAL_MINUTES` prevents runaway frequency, `MAX_TENDERS_PER_RUN`
+   caps batch size); if a single run processes more than a sanity-check limit of tenders, log a
+   warning and stop rather than burning API budget silently. Assess's own tool-use loop has its
+   own separate cap (`MaxToolIterations`, currently 5) for the same reason, one level down.
 
-## Prompt 1 — Triage / classifier (Stage 2)
+## Prompt 1 — Assess: relevance + eligibility, agentic (Stage 2)
 
-**Role**: decide whether a tender is worth a human's or the verifier's attention at all.
+**Role**: decide whether a tender is relevant to the supplier at all, and — if so — whether they
+are eligible to bid, in one combined session. Unlike every other prompt in this document, Assess
+has real tool access: it is given `get_tender` and `search_tenders` as native Anthropic tools
+(the same MCP tools `mcp-server` exposes, discovered live via `McpClient.ListToolsAsync()` rather
+than a hand-maintained schema copy — see `Loop/Stages/AssessStage.cs`) and may call either, as
+many times as it judges useful, before producing its final verdict. This replaced the former
+separate "triage" (Stage 2) and "verifier" (Stage 3) prompts — merged 2026-08-10 so the model
+genuinely drives MCP tool use instead of only ever reasoning over data pre-fetched deterministically
+in code; see `docs/conclusions-2nd-iteration.md` for the tradeoffs of that change (every tender now
+costs at least one Claude call, since there's no cheap classify-first gate left).
 
-**System prompt** (`# triage v1`):
+**System prompt** (`# assess v1`):
 ```
-You are a tender relevance classifier for a supplier. You are given a tender summary and the
-supplier's company profile. Decide if this tender is worth further review.
+You are assessing one tender for a supplier, in two parts: whether it is relevant to them at
+all, and — if so — whether they are eligible to bid. You are given the tender summary, the
+supplier's company profile, the tender's full detail (including eligibilityText), and
+several retrieved snippets from the supplier's qualification documents. You also have tools
+available (get_tender, search_tenders) if you need to re-examine this tender's detail or
+look at other similar/related tenders before deciding — use them if genuinely useful, but
+you do not have to.
 
-Rules:
+Relevance:
 - Base your decision only on category match, region match, and value range from the profile.
-- Do not guess at eligibility requirements — that is a separate stage.
-- If the tender's category is not in the company's list and isn't a close synonym, mark not relevant.
-- Respond with strict JSON only: {"relevant": bool, "relevanceScore": 0.0-1.0, "reason": "string, one sentence"}
-```
+- Do not guess at eligibility requirements when scoring relevance — eligibility is assessed
+  separately below, using citedClause evidence, not a relevance-stage guess.
+- If the tender's category is not in the company's list and isn't a close synonym, mark not
+  relevant.
 
-## Prompt 2 — Eligibility verifier (Stage 3)
-
-**Role**: check hard eligibility blockers against the company's qualification docs.
-
-**System prompt** (`# verifier v1`):
-```
-You are an eligibility verifier. You are given full tender details (including eligibilityText)
-and several retrieved snippets from the supplier's qualification documents.
-
-Rules:
+Eligibility (only meaningful if relevant):
 - Only flag a blocker if it is explicitly stated in eligibilityText.
-- Every verdict of "eligible" or "ineligible" must include citedClause: a literal excerpt
-  (under 25 words) from eligibilityText that your verdict is based on.
-- If eligibilityText does not clearly state a disqualifying or qualifying condition relevant to
-  the supplied qualification snippets, return verdict "uncertain" — do not guess.
+- Every eligibilityVerdict of "eligible" or "ineligible" must include citedClause: a literal
+  excerpt (under 25 words) from eligibilityText that your verdict is based on.
+- If eligibilityText does not clearly state a disqualifying or qualifying condition relevant
+  to the supplied qualification snippets, return eligibilityVerdict "uncertain" — do not guess.
 - Never invent a requirement that is not present in eligibilityText.
-- Respond with strict JSON only:
-  {"verdict": "eligible"|"ineligible"|"uncertain", "rationale": "string", "citedClause": "string or null"}
+- If the tender is not relevant, still set eligibilityVerdict to "uncertain" and citedClause
+  to null.
+
+Respond with strict JSON only:
+{"relevant": bool, "relevanceScore": 0.0-1.0, "relevanceReason": "string, one sentence",
+ "eligibilityVerdict": "eligible"|"ineligible"|"uncertain", "eligibilityRationale": "string",
+ "citedClause": "string or null"}
 ```
 
-## Prompt 3 — Handoff summarizer (Stage 5)
+The agentic tool-use phase above and the final structured-JSON verdict are two separate Anthropic
+calls, not one — see "Structured outputs" below for why.
+
+## Prompt 2 — Handoff summarizer (Stage 5)
 
 **Role**: write the human-facing Slack brief.
 
@@ -85,18 +104,18 @@ Rules:
    "rationale": "string", "keyQuestions": ["string", ...]}
 ```
 
-## Prompt 4 — Self-improvement analysis (Stage 6, the "hill-climbing" outer loop)
+## Prompt 3 — Self-improvement analysis (Stage 6, the "hill-climbing" outer loop)
 
 **Role**: review disagreements between the system's own verdicts and what humans actually
-decided, and propose one revision to one of the three prompts above — never applied
+decided, and propose one revision to one of the two prompts above — never applied
 automatically, see "Human review gate" below.
 
 **System prompt** (`# analysis v1`):
 ```
 You are reviewing disagreements between this system's automated eligibility verdicts and the
-actual decisions procurement managers made, to propose ONE improvement to one of the three
-existing system prompts (triage, verifier, handoff). You are given a batch of resolved tender
-reviews: each with the verdict/rationale/citedClause the verifier produced, the relevance score,
+actual decisions procurement managers made, to propose ONE improvement to one of the two
+existing system prompts (assess, handoff). You are given a batch of resolved tender
+reviews: each with the verdict/rationale/citedClause the assessor produced, the relevance score,
 and the human's final decision (and optional note).
 
 Rules:
@@ -104,8 +123,8 @@ Rules:
   the same pattern of disagreement — do not propose a change based on a single example.
 - Every claim you make about a pattern must cite the specific tender ids that show it.
 - You must NOT propose removing, weakening, or making conditional any of these three existing
-  requirements, in any of the three prompts: (a) every "eligible"/"ineligible" verdict must
-  include a literal citedClause from eligibilityText, (b) the verifier must never invent a
+  requirements, in either of the two prompts: (a) every "eligible"/"ineligible" verdict must
+  include a literal citedClause from eligibilityText, (b) the assessor must never invent a
   requirement not present in eligibilityText, (c) low confidence or ambiguity must produce
   "uncertain" and escalate to a human, never a silent guess. If the evidence suggests one of
   these is actually causing bad outcomes, say so explicitly in your justification but do not
@@ -115,7 +134,7 @@ Rules:
 - Never claim more confidence than the data supports — if the pattern is weak or contradictory
   across examples, say so plainly instead of proposing a change anyway.
 - Respond with strict JSON only:
-  {"targetPrompt": "triage"|"verifier"|"handoff", "proposedPromptText": "string",
+  {"targetPrompt": "assess"|"handoff", "proposedPromptText": "string",
    "justification": "string", "citedTenderIds": ["string", ...]}
 ```
 
@@ -131,13 +150,18 @@ human review.
 
 ## Versioning
 
-Each prompt is prefixed with a version comment when it changes (`# triage v2 — 2026-08-08:
+Each prompt is prefixed with a version comment when it changes (`# assess v2 — 2026-08-08:
 tightened category matching`) so audit log entries can be tied back to which prompt version
-produced them. Current versions: triage v1, verifier v1, handoff v3, analysis v1.
+produced them. Current versions: assess v1, handoff v3, analysis v1.
 
 ## Structured outputs
 
-Stages 2, 3, and (as of `handoff v3`) 5 use Anthropic's `output_config.format` (JSON schema)
-rather than relying solely on the prompt's "strict JSON only" instruction, so the response shape
-is schema-guaranteed rather than just requested. `AnthropicClient.CompleteStructuredAsync<T>`
-still retries on parse failure as defense-in-depth. Stage 6 (analysis) also uses this.
+Assess's agentic tool-use research phase and its final verdict are two separate Anthropic calls
+(see Prompt 1 above) — only the final verdict call uses `output_config.format`; the tool-use
+phase deliberately does not, so it reuses `AnthropicClient.CompleteStructuredAsync<T>`'s existing,
+already-tested retry/schema machinery unchanged rather than depending on whether Anthropic's API
+cleanly supports mixing tool-use and structured output in one request. Stage 5 (handoff, as of
+`handoff v3`) and Stage 6 (analysis) use `output_config.format` (JSON schema) for their entire
+call, rather than relying solely on the prompt's "strict JSON only" instruction, so the response
+shape is schema-guaranteed rather than just requested. `AnthropicClient.CompleteStructuredAsync<T>`
+still retries on parse failure as defense-in-depth, for every one of these structured-output calls.

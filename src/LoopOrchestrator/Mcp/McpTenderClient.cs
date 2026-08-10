@@ -53,6 +53,29 @@ public sealed class McpTenderClient(HttpClient httpClient, McpTenderClientOption
     public Task<CompanyProfileData> GetCompanyProfileAsync(CancellationToken cancellationToken = default) =>
         CallToolAsync<CompanyProfileData>("get_company_profile", new Dictionary<string, object?>(), cancellationToken)!;
 
+    public async Task<IReadOnlyList<McpToolDescriptor>> ListAvailableToolsAsync(CancellationToken cancellationToken = default)
+    {
+        var client = await EnsureConnectedAsync(cancellationToken);
+        var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
+        return tools.Select(t => new McpToolDescriptor(t.Name, t.Description ?? string.Empty, t.JsonSchema)).ToList();
+    }
+
+    public async Task<string> CallToolRawAsync(
+        string toolName, IReadOnlyDictionary<string, object?> arguments, CancellationToken cancellationToken = default)
+    {
+        var client = await EnsureConnectedAsync(cancellationToken);
+        var result = await client.CallToolAsync(toolName, arguments, cancellationToken: cancellationToken);
+
+        if (result.IsError == true)
+        {
+            var errorText = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text ?? $"'{toolName}' failed with no error detail.";
+            throw new McpToolCallException(errorText);
+        }
+
+        return result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text
+            ?? throw new InvalidOperationException($"Tool '{toolName}' returned no text content.");
+    }
+
     private async Task<T?> CallToolAsync<T>(string toolName, Dictionary<string, object?> arguments, CancellationToken cancellationToken)
     {
         var client = await EnsureConnectedAsync(cancellationToken);

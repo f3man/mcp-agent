@@ -1,6 +1,6 @@
 @startuml architecture-sequence
 !theme plain
-title One /run-now pass — Discover → Classify → Verify → Persist → Handoff (one connected trace)
+title One /run-now pass — Discover → Assess → Persist → Handoff (one connected trace)
 
 skinparam wrapWidth 220
 skinparam maxMessageSize 220
@@ -10,9 +10,8 @@ participant "LoopRunner" as Runner
 participant "DiscoverStage" as Discover
 participant "mcp-server" as Mcp
 participant "ITenderStateStore\n(Azurite)" as State
-participant "ClassifyStage" as Classify
+participant "AssessStage" as Assess
 participant "Anthropic API" as Anthropic
-participant "VerifyStage" as Verify
 participant "IEligibilityIndex\n(RAG)" as Rag
 participant "OpenAI Embeddings" as OpenAi
 participant "PersistStage" as Persist
@@ -31,28 +30,39 @@ Discover --> Runner : new tenders (≤ MAX_TENDERS_PER_RUN)
 deactivate Discover
 
 loop for each new tender
-  Runner -> Classify : RunAsync(tender, companyProfile)
-  activate Classify
-  Classify -> Mcp : get_company_profile()
-  Classify -> Anthropic : triage prompt → {relevant, relevanceScore, reason}
-  Classify --> Runner : ClassifyResult
-  deactivate Classify
+  Runner -> Assess : RunAsync(tender, companyProfile)
+  activate Assess
+  Assess -> Mcp : get_tender(tenderId) → full detail incl.\ntenderId, procurementMethod,\nmainProcurementCategory, items[], eligibilityText
+  note right : deterministic, always called once —\nguarantees ProcurementMethod/eligibilityText\nregardless of what the agentic phase below does
+  Assess -> Rag : QueryAsync(eligibilityText, topK=5)
+  Rag -> OpenAi : embed query text
+  Rag --> Assess : top-5 qualification snippets
+
+  Assess -> Anthropic : assess prompt + tender/company/snippets\n+ tools=[get_tender, search_tenders]
+  note right
+    Real agentic tool use (RunAgenticToolLoopAsync) — Claude decides
+    itself whether/how to call get_tender/search_tenders (up to
+    MaxToolIterations=5) before concluding. Each tool_use loops
+    back through mcp-server exactly like the deterministic call
+    above; this is genuinely LLM-driven MCP use, not a fixed wrapper.
+  end note
+  loop while Claude requests a tool (stop_reason == "tool_use")
+    Anthropic --> Assess : tool_use(name, input)
+    Assess -> Mcp : CallToolRawAsync(name, args)\n(allow-listed: get_tender/search_tenders only)
+    Mcp --> Assess : tool result
+    Assess -> Anthropic : tool_result
+  end
+  Anthropic --> Assess : final research findings (plain text)
+
+  Assess -> Anthropic : assess prompt + findings\n→ structured JSON verdict\n{relevant, relevanceScore, relevanceReason,\neligibilityVerdict, eligibilityRationale, citedClause}
+  note right : eligibilityVerdict forced "uncertain" in code\nif eligible/ineligible lacks a citedClause\n(AssessPolicy.EnforceCitedClauseGuardrail)
+  Assess --> Runner : AssessResult (incl. full TenderDetail)
+  deactivate Assess
 
   alt not relevant
     Runner -> Persist : Upsert(Status=Skipped)
     note right : "clean skip" — logged, no Slack noise
   else relevant
-    Runner -> Verify : RunAsync(tenderId)
-    activate Verify
-    Verify -> Mcp : get_tender(tenderId) → full detail incl.\ntenderId, procurementMethod,\nmainProcurementCategory, items[], eligibilityText
-    Verify -> Rag : QueryAsync(eligibilityText, topK=5)
-    Rag -> OpenAi : embed query text
-    Rag --> Verify : top-5 qualification snippets
-    Verify -> Anthropic : verifier prompt + snippets\n→ {verdict, rationale, citedClause}
-    note right : verdict forced "uncertain" in code\nif eligible/ineligible lacks a citedClause
-    Verify --> Runner : VerifyResult (incl. full TenderDetail)
-    deactivate Verify
-
     alt ProcurementMethodPolicy.IsExcluded(procurementMethod == "limited")
       Runner -> Persist : Upsert(Status=Skipped,\nNotes="invite-only, not biddable")
       note right : checked before any LLM budget is spent\non Handoff, and before Slack is ever touched

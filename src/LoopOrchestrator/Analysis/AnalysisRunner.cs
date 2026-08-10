@@ -142,8 +142,7 @@ public sealed class AnalysisRunner(
 
     private static string CurrentVersionFor(string targetPrompt) => targetPrompt switch
     {
-        "triage" => PromptBook.TriageVersion,
-        "verifier" => PromptBook.VerifierVersion,
+        "assess" => PromptBook.AssessVersion,
         "handoff" => PromptBook.HandoffVersion,
         _ => "unknown",
     };

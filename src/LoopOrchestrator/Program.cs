@@ -111,8 +111,7 @@ builder.Services.AddHttpClient<SlackInteractionHandler>().AddStandardResilienceH
 // Loop stages + runner — Scoped, so a single run's object graph (including the shared
 // McpTenderClient above) is fully independent from any other concurrent/subsequent run.
 builder.Services.AddScoped<DiscoverStage>();
-builder.Services.AddScoped<ClassifyStage>();
-builder.Services.AddScoped<VerifyStage>();
+builder.Services.AddScoped<AssessStage>();
 builder.Services.AddScoped<PersistStage>();
 builder.Services.AddScoped<HandoffStage>();
 builder.Services.AddScoped<LoopRunner>();

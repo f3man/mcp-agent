@@ -212,8 +212,8 @@ things a coding assistant can actually produce without a screen to record; one i
 - **Architecture diagram** — done, as PlantUML rather than draw.io/Miro (same "static diagram,
   not a dashboard screenshot" intent): `docs/diagrams/architecture-components.puml` (agent ↔ RAG
   ↔ memory ↔ external APIs, matching the spec's own framing),
-  `docs/diagrams/architecture-sequence.puml` (the exact Discover→Classify→Verify→Persist→Handoff
-  call sequence that produces the connected trace the demo script narrates, plus a second diagram
+  `docs/diagrams/architecture-sequence.puml` (the exact Discover→Assess→Persist→Handoff call
+  sequence that produces the connected trace the demo script narrates, plus a second diagram
   in the same file for the Slack button-click round-trip), and
   `docs/diagrams/architecture-analysis.puml` (the self-improvement outer loop, split out of the
   components diagram once it grew too dense to read in one picture). All three rendered clean
@@ -224,6 +224,51 @@ things a coding assistant can actually produce without a screen to record; one i
   assistant: it requires someone's screen, an Aspire Dashboard session, and a real Slack channel
   open side by side. `docs/demo-script.md` is written so anyone can follow it and produce that
   recording directly.
+
+## Real LLM-driven MCP tool use — merging Classify+Verify into agentic Assess
+
+Until this point, `loop-orchestrator` never let an LLM decide which MCP tool to call — every MCP
+call site was a compile-time-fixed method on `IMcpTenderClient` (`DiscoverStage` always calls
+`list_tenders` with fixed args, `VerifyStage` always calls `get_tender`), and every Anthropic call
+was a single-shot `CompleteStructuredAsync`: all data pre-fetched deterministically in C# and
+handed to the model as an already-assembled JSON blob, with zero ability for the model to request
+more.
+
+Changed that: `ClassifyStage` and `VerifyStage` are merged into one new `AssessStage`. Every
+surviving (not-yet-seen) tender now gets one tool-augmented Claude session
+(`AnthropicClient.RunAgenticToolLoopAsync`, new) where Claude decides itself whether/how to call
+`get_tender`/`search_tenders` — the real MCP tools `mcp-server` exposes, discovered live via
+`McpClient.ListToolsAsync()` rather than a hand-maintained schema copy — before producing both a
+relevance judgment and an eligibility verdict. This genuinely satisfies "the LLM drives MCP tool
+use," not a fixed wrapper around it.
+
+One deliberate exception, **not** left to the model: `get_tender` is still called once in code up
+front (exactly as `VerifyStage` used to), because `ProcurementMethodPolicy`'s exclusion filter is a
+hard legal/business rule (an invite-only tender literally cannot be bid on), not a reasoning
+judgment — it cannot depend on whether Claude happens to fetch `get_tender` in a given session.
+Claude still gets `get_tender` (and `search_tenders`) as genuinely callable tools for the actual
+relevance/eligibility research — free to re-fetch, or look at other tenders, or use neither.
+
+Also deliberately **not** combined: the agentic tool-use phase and the final schema-guaranteed
+verdict stay two separate Anthropic calls. The tool-use loop produces plain-text findings; a
+normal (unchanged) `CompleteStructuredAsync` call afterward gets the schema-guaranteed JSON
+verdict, with the loop's findings folded into that call's user message. This reuses 100% of the
+already-tested structured-output retry/schema machinery rather than depending on whether
+Anthropic's API cleanly supports mixing tool-use and `output_config.format` in one request.
+
+Tradeoff accepted, explicitly: the former cheap `ClassifyStage`-first gate (skip an irrelevant
+tender before spending any real LLM budget on it) is gone — every surviving tender now costs at
+least one Claude call with tool access. `MAX_TENDERS_PER_RUN` remains the safety net against
+runaway cost, and the tool loop itself has its own separate cap (`MaxToolIterations = 5`).
+
+Guardrails carried over unchanged, verified still enforced: the citedClause requirement
+(`AssessPolicy.EnforceCitedClauseGuardrail`, extracted as a pure function exactly like
+`HandoffPolicy.ShouldEscalate`), the `ProcurementMethodPolicy` invite-only exclusion, and the
+allow-list restricting which tool names `AssessStage`'s executor will actually call
+(`AssessPolicy.IsAllowedTool` — `get_tender`/`search_tenders` only; `list_tenders`/
+`get_company_profile` stay deterministic, hardcoded elsewhere). See
+`docs/diagrams/architecture-components.puml` and `architecture-sequence.puml` for the updated
+diagrams, and `docs/prompt-book.md`'s Prompt 1 for the merged `assess v1` prompt text.
 
 ## Cloud deployment status
 

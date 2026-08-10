@@ -18,10 +18,11 @@ public static class PromptGuardrails
     // One entry per prompt PromptBook.cs currently defines that Stage 6 is allowed to propose
     // changes to. Each required phrase is copied verbatim from the live prompt text — if a
     // proposal's full replacement text no longer contains ALL of them, it's rejected outright.
+    // "assess" carries the union of what used to be two separate entries (the former "verifier"
+    // and "triage" prompts, merged into one — see PromptBook.AssessSystemPrompt's doc comment).
     private static readonly Dictionary<string, string[]> ProtectedPhrases = new()
     {
-        ["verifier"] = ["citedClause", "Never invent a requirement", "\"uncertain\""],
-        ["triage"] = ["Do not guess at eligibility requirements"],
+        ["assess"] = ["citedClause", "Never invent a requirement", "\"uncertain\"", "Do not guess at eligibility requirements"],
         ["handoff"] = ["Never state a recommendation more confidently than"],
     };
 

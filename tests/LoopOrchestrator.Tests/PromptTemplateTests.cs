@@ -11,34 +11,27 @@ namespace LoopOrchestrator.Tests;
 public class PromptTemplateTests
 {
     [Fact]
-    public void TriagePrompt_MatchesPromptBookDoc()
+    public void AssessPrompt_MatchesPromptBookDoc()
     {
-        AssertPromptMatchesDoc(PromptBook.TriageSystemPrompt, PromptBook.TriageVersion, codeBlockIndex: 0);
-    }
-
-    [Fact]
-    public void VerifierPrompt_MatchesPromptBookDoc()
-    {
-        AssertPromptMatchesDoc(PromptBook.VerifierSystemPrompt, PromptBook.VerifierVersion, codeBlockIndex: 1);
+        AssertPromptMatchesDoc(PromptBook.AssessSystemPrompt, PromptBook.AssessVersion, codeBlockIndex: 0);
     }
 
     [Fact]
     public void HandoffPrompt_MatchesPromptBookDoc()
     {
-        AssertPromptMatchesDoc(PromptBook.HandoffSystemPrompt, PromptBook.HandoffVersion, codeBlockIndex: 2);
+        AssertPromptMatchesDoc(PromptBook.HandoffSystemPrompt, PromptBook.HandoffVersion, codeBlockIndex: 1);
     }
 
     [Fact]
     public void AnalysisPrompt_MatchesPromptBookDoc()
     {
-        AssertPromptMatchesDoc(PromptBook.AnalysisSystemPrompt, PromptBook.AnalysisVersion, codeBlockIndex: 3);
+        AssertPromptMatchesDoc(PromptBook.AnalysisSystemPrompt, PromptBook.AnalysisVersion, codeBlockIndex: 2);
     }
 
     [Fact]
     public void EachPrompt_StartsWithItsVersionCommentLine()
     {
-        Assert.StartsWith("# " + PromptBook.TriageVersion, PromptBook.TriageSystemPrompt);
-        Assert.StartsWith("# " + PromptBook.VerifierVersion, PromptBook.VerifierSystemPrompt);
+        Assert.StartsWith("# " + PromptBook.AssessVersion, PromptBook.AssessSystemPrompt);
         Assert.StartsWith("# " + PromptBook.HandoffVersion, PromptBook.HandoffSystemPrompt);
         Assert.StartsWith("# " + PromptBook.AnalysisVersion, PromptBook.AnalysisSystemPrompt);
     }
@@ -61,9 +54,9 @@ public class PromptTemplateTests
         var markdown = File.ReadAllText(docPath).Replace("\r\n", "\n");
 
         // Each of the three "**System prompt** (`# ... vN`):" sections is followed by one fenced
-        // code block — those are the actual prompt bodies, in triage/verifier/handoff order.
+        // code block — those are the actual prompt bodies, in assess/handoff/analysis order.
         var matches = Regex.Matches(markdown, @"\*\*System prompt\*\*[^\n]*:\n```\n(.*?)\n```", RegexOptions.Singleline);
-        Assert.Equal(4, matches.Count);
+        Assert.Equal(3, matches.Count);
         return matches.Select(m => m.Groups[1].Value).ToList();
     }
 

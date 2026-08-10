@@ -10,9 +10,9 @@ actor "Timer /\nPOST /run-now" as Trigger
 actor "Slack user\n(clicks Bid / No-Bid)" as SlackUser
 
 package "loop-orchestrator (the Agent)" {
-  component "LoopRunner\n(Discover → Classify → Verify →\nProcurementMethodPolicy filter →\nPersist → Handoff)" as Runner
+  component "LoopRunner\n(Discover → Assess →\nProcurementMethodPolicy filter →\nPersist → Handoff)" as Runner
   component "IMcpTenderClient\n(McpTenderClient)" as McpClient
-  component "AnthropicClient\n(structured JSON output)" as Anthropic
+  component "AnthropicClient\n(agentic tool-use loop +\nstructured JSON output)" as Anthropic
   component "SlackNotifier\n(outgoing: Block Kit blocks\nwith interactive buttons)" as Slack
   component "SlackInteractionHandler\n(POST /slack/interactions —\nHMAC signature verification)" as SlackInteraction
   component "DecisionUpdater\n(pure: applies Bid/NoBid)" as DecisionUpdater
@@ -46,20 +46,21 @@ file "data/company-profile.json" as ProfileFile
 
 Trigger --> Runner : triggers one pass
 
-Runner --> McpClient : Discover / Verify\n(tender data)
+Runner --> McpClient : Discover (list_tenders) /\nAssess's deterministic\nget_tender pre-fetch
 McpClient --> McpTools : MCP Streamable HTTP\n(X-Api-Key)
 McpTools --> Prozorro : HTTPS
 McpTools --> ProfileSvc
 ProfileSvc --> ProfileFile : reads at request time
 
-Runner --> Index : Verify\n(query eligibility snippets)
+Runner --> Index : Assess\n(query eligibility snippets)
 Index --> Chunker : chunk at startup
 Chunker --> QualDocs : reads once
 Index --> Embedder : embed chunks + query
 Embedder --> OpenAiApi : HTTPS
 
-Runner --> Anthropic : Classify / Verify / Handoff\n(one call per stage)
+Runner --> Anthropic : Assess (agentic + structured) /\nHandoff (structured)
 Anthropic --> AnthropicApi : HTTPS
+Anthropic ..> McpClient : during Assess: tool_use(get_tender/\nsearch_tenders) routed back through\nAssessStage's own executor — genuinely\nLLM-decided MCP calls, allow-listed in code\n(not Claude calling mcp-server directly —\nAnthropic's API returns a tool_use block,\nAssessStage executes it against McpClient)
 
 Runner --> StateStore : Persist +\nseen-tender-ID idempotency guard
 StateStore --> Table : Azure.Data.Tables SDK

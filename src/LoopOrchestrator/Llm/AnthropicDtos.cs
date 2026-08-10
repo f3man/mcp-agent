@@ -28,9 +28,35 @@ public sealed record AnthropicMessageRequest(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     AnthropicOutputConfig? OutputConfig = null);
 
+// Id/Name/Input are populated only when Type == "tool_use" — Claude pausing mid-turn to request
+// a tool call instead of (or alongside) finishing its answer. See AnthropicClient.RunAgenticToolLoopAsync.
 public sealed record AnthropicContentBlock(
     [property: JsonPropertyName("type")] string Type,
-    [property: JsonPropertyName("text")] string? Text);
+    [property: JsonPropertyName("text")] string? Text,
+    [property: JsonPropertyName("id")] string? Id = null,
+    [property: JsonPropertyName("name")] string? Name = null,
+    [property: JsonPropertyName("input")] JsonElement? Input = null);
+
+/// <summary>One entry in a `tools` array — matches Anthropic's tools[] shape exactly
+/// (name/description/input_schema). MCP's own Tool.InputSchema is already JSON Schema, so mapping
+/// an MCP tool descriptor into this is a direct 1:1 copy, no translation needed.</summary>
+public sealed record AnthropicTool(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("input_schema")] JsonElement InputSchema);
+
+/// <summary>Request shape used only by RunAgenticToolLoopAsync's multi-turn conversation — kept
+/// separate from AnthropicMessageRequest (whose Messages/Content are plain strings, used by every
+/// existing single-shot caller) because a tool-use turn's content is a list of content-block
+/// objects (text / tool_use echoed back / tool_result), not a bare string. Content entries are
+/// built as plain anonymous objects at the call site — same "anonymous object for JSON building"
+/// convention already used in Loop/Stages/HandoffStage.cs's BuildBlocks.</summary>
+public sealed record AnthropicAgenticRequest(
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("max_tokens")] int MaxTokens,
+    [property: JsonPropertyName("system")] string System,
+    [property: JsonPropertyName("messages")] IReadOnlyList<object> Messages,
+    [property: JsonPropertyName("tools")] IReadOnlyList<AnthropicTool> Tools);
 
 public sealed record AnthropicUsage(
     [property: JsonPropertyName("input_tokens")] int InputTokens,

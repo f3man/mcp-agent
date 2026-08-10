@@ -11,41 +11,31 @@ namespace LoopOrchestrator.Llm;
 public static class JsonSchemas
 {
     /// <summary>
-    /// Stage 2 (Classify) output: {relevant, relevanceScore, reason}. relevanceScore has no
+    /// Stage 2 (Assess) output: {relevant, relevanceScore, relevanceReason, eligibilityVerdict,
+    /// eligibilityRationale, citedClause} — the combined relevance+eligibility verdict produced
+    /// after AssessStage's agentic tool-use research phase concludes. relevanceScore has no
     /// "minimum"/"maximum" keyword — confirmed live against the real Anthropic API that
     /// output_config.format.schema rejects those on a "number" type ("properties maximum, minimum
     /// are not supported"), a real API-side constraint no amount of fake-HTTP unit testing could
     /// have caught. The 0.0-1.0 range is enforced by the prompt's own instruction instead
-    /// (PromptBook.TriageSystemPrompt); AnthropicClient.CompleteStructuredAsync's retry loop is the
-    /// defense-in-depth backstop if the model ever drifts outside that range in a way that matters.
+    /// (PromptBook.AssessSystemPrompt). citedClause is nullable — required whenever
+    /// eligibilityVerdict is "eligible"/"ineligible", but "uncertain" (or a non-relevant tender)
+    /// may legitimately have none; AnthropicClient.CompleteStructuredAsync's retry loop is the
+    /// defense-in-depth backstop either way.
     /// </summary>
-    public static readonly JsonElement TriageResult = JsonDocument.Parse(
+    public static readonly JsonElement Assessment = JsonDocument.Parse(
         """
         {
           "type": "object",
           "properties": {
             "relevant": { "type": "boolean" },
             "relevanceScore": { "type": "number", "description": "A value between 0.0 and 1.0." },
-            "reason": { "type": "string" }
-          },
-          "required": ["relevant", "relevanceScore", "reason"],
-          "additionalProperties": false
-        }
-        """).RootElement.Clone();
-
-    /// <summary>Stage 3 (Verify) output: {verdict, rationale, citedClause}. citedClause is
-    /// nullable — the verifier prompt requires "eligible"/"ineligible" to always carry one, but
-    /// "uncertain" may legitimately have none.</summary>
-    public static readonly JsonElement EligibilityVerdict = JsonDocument.Parse(
-        """
-        {
-          "type": "object",
-          "properties": {
-            "verdict": { "type": "string", "enum": ["eligible", "ineligible", "uncertain"] },
-            "rationale": { "type": "string" },
+            "relevanceReason": { "type": "string" },
+            "eligibilityVerdict": { "type": "string", "enum": ["eligible", "ineligible", "uncertain"] },
+            "eligibilityRationale": { "type": "string" },
             "citedClause": { "type": ["string", "null"] }
           },
-          "required": ["verdict", "rationale", "citedClause"],
+          "required": ["relevant", "relevanceScore", "relevanceReason", "eligibilityVerdict", "eligibilityRationale", "citedClause"],
           "additionalProperties": false
         }
         """).RootElement.Clone();
@@ -78,7 +68,7 @@ public static class JsonSchemas
         {
           "type": "object",
           "properties": {
-            "targetPrompt": { "type": "string", "enum": ["triage", "verifier", "handoff"] },
+            "targetPrompt": { "type": "string", "enum": ["assess", "handoff"] },
             "proposedPromptText": { "type": "string" },
             "justification": { "type": "string" },
             "citedTenderIds": { "type": "array", "items": { "type": "string" } }
