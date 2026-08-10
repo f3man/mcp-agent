@@ -29,8 +29,11 @@ public static class Extensions
 
         builder.Services.ConfigureHttpClientDefaults(http =>
         {
-            // Turn on resilience by default
-            http.AddStandardResilienceHandler();
+            // Resilience is NOT turned on here — added explicitly per HttpClient instead (see
+            // each project's Program.cs), so a client that genuinely needs a longer timeout (e.g.
+            // LoopOrchestrator's AnthropicClient — LLM completions routinely exceed the standard
+            // handler's default 30s total-request timeout) can be configured without stacking a
+            // second resilience handler on top of a blanket default.
 
             // Turn on service discovery by default
             http.AddServiceDiscovery();

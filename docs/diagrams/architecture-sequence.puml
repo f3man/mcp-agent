@@ -1,0 +1,139 @@
+@startuml architecture-sequence
+!theme plain
+title One /run-now pass — Discover → Classify → Verify → Persist → Handoff (one connected trace)
+
+skinparam wrapWidth 220
+skinparam maxMessageSize 220
+
+actor Caller
+participant "LoopRunner" as Runner
+participant "DiscoverStage" as Discover
+participant "mcp-server" as Mcp
+participant "ITenderStateStore\n(Azurite)" as State
+participant "ClassifyStage" as Classify
+participant "Anthropic API" as Anthropic
+participant "VerifyStage" as Verify
+participant "IEligibilityIndex\n(RAG)" as Rag
+participant "OpenAI Embeddings" as OpenAi
+participant "PersistStage" as Persist
+participant "HandoffStage" as Handoff
+participant "Slack webhook" as Slack
+
+Caller -> Runner : POST /run-now
+activate Runner
+
+Runner -> Discover : RunAsync()
+activate Discover
+Discover -> Mcp : list_tenders(status=active, limit=100)
+Discover -> State : GetSeenTenderIdsAsync()
+Discover -> Discover : filter out already-seen\n(sole idempotency guard)
+Discover --> Runner : new tenders (≤ MAX_TENDERS_PER_RUN)
+deactivate Discover
+
+loop for each new tender
+  Runner -> Classify : RunAsync(tender, companyProfile)
+  activate Classify
+  Classify -> Mcp : get_company_profile()
+  Classify -> Anthropic : triage prompt → {relevant, relevanceScore, reason}
+  Classify --> Runner : ClassifyResult
+  deactivate Classify
+
+  alt not relevant
+    Runner -> Persist : Upsert(Status=Skipped)
+    note right : "clean skip" — logged, no Slack noise
+  else relevant
+    Runner -> Verify : RunAsync(tenderId)
+    activate Verify
+    Verify -> Mcp : get_tender(tenderId) → full detail incl.\ntenderId, procurementMethod,\nmainProcurementCategory, items[], eligibilityText
+    Verify -> Rag : QueryAsync(eligibilityText, topK=5)
+    Rag -> OpenAi : embed query text
+    Rag --> Verify : top-5 qualification snippets
+    Verify -> Anthropic : verifier prompt + snippets\n→ {verdict, rationale, citedClause}
+    note right : verdict forced "uncertain" in code\nif eligible/ineligible lacks a citedClause
+    Verify --> Runner : VerifyResult (incl. full TenderDetail)
+    deactivate Verify
+
+    alt ProcurementMethodPolicy.IsExcluded(procurementMethod == "limited")
+      Runner -> Persist : Upsert(Status=Skipped,\nNotes="invite-only, not biddable")
+      note right : checked before any LLM budget is spent\non Handoff, and before Slack is ever touched
+    else biddable
+      Runner -> Persist : Upsert(Status=Verified, verdict, citedClause)
+
+      Runner -> Handoff : RunAsync(detail, verdict, rationale, score)
+      activate Handoff
+      alt uncertain, or eligible & value > HANDOFF_VALUE_THRESHOLD
+        Handoff -> Anthropic : handoff prompt (structured JSON output)\n→ {categoryEmoji, shortTitle, description,\nrationale, keyQuestions} — Ukrainian
+        Handoff -> Handoff : BuildBlocks() — real Slack Block Kit:\nheader, fields, description, recommendation,\nkey questions, divider, 2 interactive buttons\n(✅ Подати заявку / ❌ Відмовитися)
+        Handoff -> Slack : POST {text, blocks}
+        Slack --> Handoff : 200 OK
+        Handoff --> Runner : HandedOff
+        Runner -> Persist : Upsert(Status=HandedOff, HumanDecision=Pending)
+      else eligible & below threshold
+        Handoff --> Runner : Verified (no Slack call)
+        note right : eligible-but-cheap-enough —\nfinal status stays Verified
+      end
+      deactivate Handoff
+    end
+  end
+end
+
+Runner -> State : SetLastSuccessfulRunAtAsync(now)
+Runner --> Caller : 202 {processed, skipped, verified, handedOff, failed}
+deactivate Runner
+
+note over Caller, Slack
+  An immediate second POST /run-now finds 0 new tenders —
+  every processed tender is now in the seen-ID set, proving
+  persistence is actually load-bearing, not just logged.
+end note
+
+@enduml
+
+@startuml architecture-sequence-slack-interaction
+!theme plain
+title Slack button click — the /slack/interactions round-trip (reverse of Handoff)
+
+skinparam wrapWidth 220
+skinparam maxMessageSize 220
+
+actor "Slack user" as Human
+participant "Slack platform" as Slack
+participant "SlackInteractionHandler" as Handler
+participant "DecisionUpdater" as Updater
+participant "ITenderStateStore\n(Azurite)" as State
+
+Human -> Slack : clicks "✅ Подати заявку"\n(or "❌ Відмовитися")
+Slack -> Handler : POST /slack/interactions\nform-urlencoded payload=<url-encoded JSON>\nX-Slack-Signature, X-Slack-Request-Timestamp
+activate Handler
+
+Handler -> Handler : IsValidSignature()\nHMAC-SHA256("v0:{timestamp}:{rawBody}", signingSecret)\n+ reject if request older than 5 minutes
+
+alt SLACK_SIGNING_SECRET unset
+  Handler --> Slack : 503 Service Unavailable
+  note right : fails CLOSED — never accepts\nan unverified request
+else signature invalid / stale / missing
+  Handler --> Slack : 401 Unauthorized
+else signature valid
+  Handler -> Handler : ParseActionValue(action.value)\n"bid_{tenderId}" / "nobid_{tenderId}"
+  Handler -> State : GetAsync(tenderId)
+  alt no TenderReviewRecord for this tenderId
+    Handler --> Slack : 404 Not Found
+  else record found
+    Handler -> Updater : ApplyDecision(existing, canonicalDecision, now)
+    Handler -> State : UpsertAsync(updated)
+    Handler --> Slack : 200 OK\n(acks within Slack's 3s window)
+
+    Handler -> Slack : POST payload.response_url\n{replace_original: true, blocks: original blocks\nminus the "actions" block, + confirmation section}
+    note right
+      Best-effort — wrapped in try/catch. The decision is
+      already durably recorded above regardless of whether
+      this cosmetic edit succeeds (response_url is short-lived).
+      Confirmation text, in Ukrainian:
+      "✅ Ваша відповідь: Буду брати участь" (Bid) or
+      "❌ Ваша відповідь: Відхилено" (NoBid) — buttons gone.
+    end note
+  end
+end
+deactivate Handler
+
+@enduml

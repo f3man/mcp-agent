@@ -41,8 +41,29 @@ internal sealed record ProzorroClassification(
     string? Id,
     string? Description);
 
+/// <summary>Confirmed live against the real API: an object with (at least) a "name" field —
+/// e.g. {"name": "послуга", "code": "E48"}. Only Name is modeled; code/priceable-unit value
+/// aren't used anywhere in this server.</summary>
+internal sealed record ProzorroUnit(
+    string? Name);
+
+/// <summary>Confirmed live: the real key is "deliveryAddress" (not "address"), and the whole
+/// object can be entirely null on some (older/cancelled) tenders; Locality can independently be
+/// null OR an empty string even when Region is populated.</summary>
+internal sealed record ProzorroDeliveryAddress(
+    string? Region,
+    string? Locality);
+
 internal sealed record ProzorroItem(
-    ProzorroClassification? Classification);
+    // Classification stays first (existing positional call sites, e.g. `new
+    // ProzorroItem(new ProzorroClassification(...))`, rely on that); the new fields all default
+    // to null so those call sites keep compiling unchanged.
+    ProzorroClassification? Classification,
+    string? Id = null,
+    string? Description = null,
+    ProzorroUnit? Unit = null,
+    double? Quantity = null,
+    ProzorroDeliveryAddress? DeliveryAddress = null);
 
 internal sealed record ProzorroTender(
     string Id,
@@ -60,7 +81,15 @@ internal sealed record ProzorroTender(
     string Status,
     List<ProzorroItem>? Items,
     // The human-readable tender number shown on the public portal (e.g. UA-2024-...) — distinct
-    // from the internal `id` (a long hex string) used for API lookups. Used to build sourceUrl.
-    [property: JsonPropertyName("tenderID")] string? TenderNumber);
+    // from the internal `id` (a long hex string) used for API lookups. Used to build sourceUrl,
+    // and (as of this change) also exposed publicly as TenderDetail.TenderId.
+    [property: JsonPropertyName("tenderID")] string? TenderNumber,
+    // Confirmed live: procurementMethod (e.g. "open"/"selective"/"limited") was present on every
+    // sampled tender, old and new, but modeled nullable defensively per this file's existing
+    // convention for every other optional upstream field. mainProcurementCategory (e.g.
+    // "goods"/"services") is genuinely ABSENT ENTIRELY on legacy tender records — confirmed live
+    // — so it must stay nullable, never default to empty string.
+    string? ProcurementMethod = null,
+    string? MainProcurementCategory = null);
 
 internal sealed record ProzorroTenderResponse(ProzorroTender? Data);

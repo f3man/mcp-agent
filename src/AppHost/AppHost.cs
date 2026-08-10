@@ -49,9 +49,14 @@ var tenderTable = storage.AddTables("tender-state");
 // the config value ourselves with a "" fallback keeps these resolvable (Running immediately) so
 // loop-orchestrator can start without them, while a real secret set via `dotnet user-secrets`
 // still flows through unchanged when present.
-var anthropicApiKey = builder.AddParameter("anthropic-api-key", builder.Configuration["Parameters:anthropic-api-key"] ?? "", secret: true);
-var slackWebhookUrl = builder.AddParameter("slack-webhook-url", builder.Configuration["Parameters:slack-webhook-url"] ?? "", secret: true);
-var openAiApiKey = builder.AddParameter("openai-api-key", builder.Configuration["Parameters:openai-api-key"] ?? "", secret: true);
+var anthropicApiKey = builder.AddParameter("anthropic-api-key", secret: true);
+var slackWebhookUrl = builder.AddParameter("slack-webhook-url",  secret: true);
+var openAiApiKey = builder.AddParameter("openai-api-key", secret: true);
+// Separate from slack-webhook-url — Slack issues one signing secret per App (used to verify a
+// POST /slack/interactions request actually came from Slack), not per webhook. Needed only for
+// the real Bid/No-Bid button clicks (HandoffStage.BuildBlocks) to do anything; without it,
+// SlackInteractionHandler fails closed (503) rather than accept unverified requests.
+var slackSigningSecret = builder.AddParameter("slack-signing-secret", secret: true);
 
 var loopOrchestrator = builder.AddProject<Projects.LoopOrchestrator>("loop-orchestrator")
     .WithReference(mcpServer)   // service discovery resolves "mcp-server" to the real endpoint, no hardcoded URL
@@ -60,9 +65,22 @@ var loopOrchestrator = builder.AddProject<Projects.LoopOrchestrator>("loop-orche
     .WithEnvironment("ANTHROPIC_API_KEY", anthropicApiKey)
     .WithEnvironment("SLACK_WEBHOOK_URL", slackWebhookUrl)
     .WithEnvironment("OPENAI_API_KEY", openAiApiKey)
+    .WithEnvironment("SLACK_SIGNING_SECRET", slackSigningSecret)
+    // Self-improvement outer loop (Analysis/), off by default at its 168h (weekly) cadence but
+    // overridable for demo purposes via POST /analyze-now regardless.
+    .WithEnvironment("ANALYSIS_INTERVAL_HOURS", "168")
     .WithExternalHttpEndpoints() // so /run-now is reachable for testing/demo, same as mcp-server
     .WaitFor(mcpServer)
     .WaitFor(tenderTable);
+
+// A resource referencing its own external endpoint — a documented Aspire pattern (the same idiom
+// used for e.g. OAuth redirect URIs) for "this service needs to know its own public URL." Backs
+// the manual GET /decisions/{tenderId}/{decision} fallback links, and is also the address a
+// Slack App's "Interactivity & Shortcuts" Request URL needs to be pointed at
+// (PUBLIC_BASE_URL + "/slack/interactions") for the real Bid/No-Bid buttons to work. Locally
+// this resolves to http://localhost:<port>, in Azure Container Apps to the real ingress
+// hostname — same code, no environment-specific branching.
+loopOrchestrator.WithEnvironment("PUBLIC_BASE_URL", loopOrchestrator.GetEndpoint("http"));
 
 if (builder.ExecutionContext.IsPublishMode)
 {

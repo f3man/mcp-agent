@@ -109,6 +109,89 @@ Each fix was verified against the real system immediately after being made — n
 against the unit test suite (which stayed green throughout, 61/61, since none of these were
 reachable by fake-HTTP scenarios).
 
+## Richer tender data, real Slack Block Kit UI, Ukrainian output
+
+Extended `get_tender`'s response with fields the original scope didn't cover — `tenderId`
+(Prozorro's own human-readable official number, e.g. `UA-2020-03-17-000090-a`, distinct from the
+existing internal `Id`), `procurementMethod`, `mainProcurementCategory`, and a real `items[]`
+array (`id`, `description`, `unit.name`, `quantity`, `deliveryAddress.region`/`.locality`) — all
+confirmed against the real live Prozorro API before implementing, not guessed (e.g.
+`mainProcurementCategory` is genuinely absent on legacy tender records; `deliveryAddress` can be
+entirely null on some cancelled/older tenders).
+
+That data now drives a real Slack message instead of a plain-text paragraph: `HandoffStage`
+assembles genuine Slack Block Kit (`header`/`section`/`divider`/`actions` blocks) with two
+interactive buttons (`✅ Подати заявку` / `❌ Відмовитися`, `action_id`s `tender_bid_action`/
+`tender_nobid_action`). The deterministic parts (tender id, formatted value/deadline/delivery
+region, recommendation label+emoji) are assembled in **code** from the verdict/`TenderDetail`
+directly — the LLM's job narrowed to only the parts that genuinely need generating (a category
+emoji, a short title, a description, the rationale, open questions), all **in Ukrainian**, as
+structured JSON (`handoff v3`) rather than free-form English prose.
+
+Receiving a real button click requires `POST /slack/interactions`, which verifies Slack's request
+signature (HMAC-SHA256 per Slack's own documented algorithm) against a new `SLACK_SIGNING_SECRET`
+— separate from `SLACK_WEBHOOK_URL` — before trusting anything; with no signing secret configured
+it fails **closed** (503), never open. Getting real button clicks flowing end-to-end additionally
+needs a one-time step outside this codebase: the Slack App that owns the incoming webhook must
+have "Interactivity & Shortcuts" enabled with its Request URL pointed at
+`PUBLIC_BASE_URL + /slack/interactions`.
+
+**Verified live**: a real `/run-now` produced 8 genuine handoffs — real Ukrainian briefs
+referencing real item descriptions/quantities/values (e.g. "500 пляшок... для доставки у
+Львівську область"), each posted as real Block Kit and confirmed with a real `200 OK` from
+Slack (which validates the block structure server-side, not just "something was sent"). A
+second immediate run confirmed idempotency held (`processed:0`).
+
+Also added: tenders with `procurementMethod == "limited"` (a real observed value — invite-only/
+pre-selected procedures an outside supplier can't realistically bid on) are now excluded right
+after Verify, before ever reaching Handoff — no wasted LLM call or Slack noise for a tender that
+was never actually biddable.
+
+## Self-improvement outer loop (hill-climbing)
+
+`src/LoopOrchestrator` implements the *inner three* loops of LangChain's "Loop Engineering"
+framing (scheduled trigger → agent loop → code-enforced verification gate) plus Cobus Greyling's
+human-gate requirement, but was originally missing the outermost **hill-climbing loop**:
+production outcomes feeding an analysis step that proposes prompt revisions, human-reviewed
+before shipping. This MVP closes that gap:
+
+- **Feedback signal**: `HandoffStage` now appends two plain links to every Slack brief —
+  `GET /decisions/{tenderId}/Bid` and `.../NoBid` — so `HumanDecision` (previously written once as
+  `"Pending"` and never updated) actually gets a real value when a human clicks one.
+- **`Analysis/AnalysisRunner.cs`**: a second, much slower loop (default weekly,
+  `ANALYSIS_INTERVAL_HOURS`, plus `POST /analyze-now` on demand) that reads resolved handoffs,
+  looks for disagreements between the verdict and what the human decided (`uncertain`-but-bid,
+  `eligible`-but-declined), and — only with at least 3 disagreements — asks Claude to propose a
+  revision to one of the three prompts.
+- **Human gate**: `AnalysisRunner` never writes to `PromptBook.cs` or any file (it has zero
+  filesystem I/O — checkable directly: `grep -rn "File\.\|Directory\." Analysis/` returns nothing).
+  It only persists a `PromptProposalRecord` and posts a Slack message; a human decides whether to
+  manually paste the proposed text in as the next prompt version.
+- **`Analysis/PromptGuardrails.cs`**: a deterministic, pre-Slack check that a proposal still
+  contains every required safety phrase for its target prompt (e.g. the verifier prompt must still
+  mention `citedClause`, `"Never invent a requirement"`, `"uncertain"`).
+
+**Verified live**, with real credits, real disagreement signal, no synthetic seeding needed: a
+`/run-now` pass produced 7 real `uncertain` handoffs; marking 3 of them `Bid` via the real decision
+links created genuine disagreement signal; `POST /analyze-now` made a real Claude call and got back
+a substantive, well-reasoned proposal (correctly citing all 3 tender IDs, arguing the verifier was
+being needlessly conservative). That proposal was then **automatically rejected by
+`PromptGuardrails`** — it had rewritten "Never invent a requirement" as "Never invent eligibility
+criteria," a plausible-sounding rewording that nonetheless didn't survive the literal phrase check
+— and was persisted with `Status="RejectedByGuardrail"`, `slackSentAt=null`, never reaching Slack.
+This is a real, live demonstration of both halves of the design at once: the mechanism correctly
+blocking an unreviewed change (exactly its job), *and* the documented, honest limitation of a
+substring check (it can't tell "reworded safely" from "reworded unsafely," which is exactly why a
+human reviews every proposal that *does* pass, and why a behavioral invariant-test suite is the
+named Phase 2 upgrade below).
+
+**Deferred (Phase 2, not built)**: audit-sampling of silently-`Skipped` tenders (Classify's real
+blind spot — false negatives never reach a human at all today), `IPromptStore` for canary rollout
+without a redeploy, behavioral `GuardrailInvariantTests` (stronger than the substring check — the
+live run above is a direct illustration of why), and paired metrics reporting to resist a
+prompt change that trivially improves one metric (e.g. more escalation) while making the system
+less useful.
+
 ## Local run still has full observability parity with the cloud plan
 
 Same story as Task 1: nothing about running this locally trades away the telemetry story. The
@@ -119,6 +202,28 @@ Application-Insights-when-publishing / Aspire-Dashboard-when-local conditional a
 *(Aspire Dashboard trace screenshot placeholder — a `loop-run` root span with nested
 `discover`/`classify`/`verify`/`persist`/`handoff` children and an `mcp-server` child span for the
 `tools/call` request, from the fully-successful run above.)*
+
+## Demo deliverables (`docs/initial-specs/task-2/04-demo.md`)
+
+That spec asks for two things: a static architecture diagram (draw.io/Miro, not a dashboard
+screenshot) and a demo recording/screenshot series following its 8-beat script. Two of these are
+things a coding assistant can actually produce without a screen to record; one isn't:
+
+- **Architecture diagram** — done, as PlantUML rather than draw.io/Miro (same "static diagram,
+  not a dashboard screenshot" intent): `docs/diagrams/architecture-components.puml` (agent ↔ RAG
+  ↔ memory ↔ external APIs, matching the spec's own framing),
+  `docs/diagrams/architecture-sequence.puml` (the exact Discover→Classify→Verify→Persist→Handoff
+  call sequence that produces the connected trace the demo script narrates, plus a second diagram
+  in the same file for the Slack button-click round-trip), and
+  `docs/diagrams/architecture-analysis.puml` (the self-improvement outer loop, split out of the
+  components diagram once it grew too dense to read in one picture). All three rendered clean
+  against the public PlantUML server with no syntax errors before being committed.
+- **Demo script** — done: `docs/demo-script.md`, the 8 beats rewritten with exact commands and
+  the real response shapes/numbers this session's live verification actually produced.
+- **Demo recording or screenshot series** — still not done, and can't be produced by this
+  assistant: it requires someone's screen, an Aspire Dashboard session, and a real Slack channel
+  open side by side. `docs/demo-script.md` is written so anyone can follow it and produce that
+  recording directly.
 
 ## Cloud deployment status
 

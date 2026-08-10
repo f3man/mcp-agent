@@ -27,6 +27,8 @@ public sealed class TenderReviewEntity : ITableEntity
     public DateTimeOffset? HandoffSentAt { get; set; }
     public string? HumanDecision { get; set; }
     public string? Notes { get; set; }
+    public DateTimeOffset? HumanDecidedAt { get; set; }
+    public string? HumanDecisionNote { get; set; }
 
     /// <summary>Table Storage forbids '/','\','#','?' in keys — replace with '_' defensively.</summary>
     public static string EscapeKey(string rawId) =>
@@ -46,6 +48,8 @@ internal static class TenderReviewMapper
         HandoffSentAt = record.HandoffSentAt,
         HumanDecision = record.HumanDecision,
         Notes = record.Notes,
+        HumanDecidedAt = record.HumanDecidedAt,
+        HumanDecisionNote = record.HumanDecisionNote,
     };
 
     public static TenderReviewRecord ToRecord(TenderReviewEntity entity) => new(
@@ -57,5 +61,7 @@ internal static class TenderReviewMapper
         EligibilityRationale: entity.EligibilityRationale,
         HandoffSentAt: entity.HandoffSentAt,
         HumanDecision: entity.HumanDecision,
-        Notes: entity.Notes);
+        Notes: entity.Notes,
+        HumanDecidedAt: entity.HumanDecidedAt,
+        HumanDecisionNote: entity.HumanDecisionNote);
 }

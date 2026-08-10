@@ -1,0 +1,72 @@
+meta {
+  name: 07 - Slack Interaction - No Bid
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/slack/interactions
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+  X-Slack-Signature: {{slackSignature}}
+  X-Slack-Request-Timestamp: {{slackTimestamp}}
+}
+
+body:text {
+  {{slackRawBody}}
+}
+
+script:pre-request {
+  const crypto = require('crypto');
+
+  const tenderId = bru.getVar('tenderId');
+  const decision = 'nobid'; // fixed for this request — see "06 - Slack Interaction - Bid" for the other one
+  const actionId = `tender_${decision}_action`;
+  const value = `${decision}_${tenderId}`;
+
+  const payload = {
+    actions: [{ action_id: actionId, value: value }],
+    response_url: 'https://hooks.slack.com/actions/T000/0000/fake-demo-url',
+    message: {
+      blocks: [
+        { type: 'header', text: { type: 'plain_text', text: '🏗️ Новий тендер: демо' } },
+        { type: 'section', text: { type: 'mrkdwn', text: 'Демо-тендер для тестування через Bruno' } },
+        { type: 'divider' },
+        {
+          type: 'actions',
+          elements: [
+            { type: 'button', text: { type: 'plain_text', text: '✅ Подати заявку' }, style: 'primary', action_id: 'tender_bid_action', value: `bid_${tenderId}` },
+            { type: 'button', text: { type: 'plain_text', text: '❌ Відмовитися' }, style: 'danger', action_id: 'tender_nobid_action', value: `nobid_${tenderId}` },
+          ],
+        },
+      ],
+    },
+  };
+
+  const rawBody = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+
+  const signingSecret = bru.getEnvVar('slackSigningSecret');
+  if (!signingSecret) {
+    throw new Error('slackSigningSecret is not set in this environment (Bruno secret var) — ' +
+      'set it to the same value as Parameters:slack-signing-secret in dotnet user-secrets.');
+  }
+
+  const baseString = `v0:${timestamp}:${rawBody}`;
+  const signature = 'v0=' + crypto.createHmac('sha256', signingSecret).update(baseString).digest('hex');
+
+  bru.setVar('slackRawBody', rawBody);
+  bru.setVar('slackTimestamp', timestamp);
+  bru.setVar('slackSignature', signature);
+}
+
+docs {
+  Simulates a real Slack "❌ Відмовитися" button click against POST /slack/interactions, with a
+  genuinely valid HMAC-SHA256 signature. Same requirements as "06 - Slack Interaction - Bid".
+
+  Expect: 200 OK, and the tender's HumanDecision becomes "NoBid".
+}

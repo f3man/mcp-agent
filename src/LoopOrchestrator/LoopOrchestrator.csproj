@@ -21,4 +21,13 @@
     <ProjectReference Include="..\ServiceDefaults\ServiceDefaults.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Bundled into this project's own output/publish directory (and therefore into its
+         container image) so IndexQualificationDocsAsync can resolve it relative to
+         AppContext.BaseDirectory in every environment — local dev, container, deployed. Flat
+         directory (4 .md files, no subdirectories) — a plain glob is enough. -->
+    <Content Include="../../data/qualification-docs/*.md" LinkBase="data/qualification-docs"
+              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

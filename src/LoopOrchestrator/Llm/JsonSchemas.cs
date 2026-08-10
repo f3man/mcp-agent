@@ -49,4 +49,42 @@ public static class JsonSchemas
           "additionalProperties": false
         }
         """).RootElement.Clone();
+
+    /// <summary>Stage 5 (Handoff) output: {categoryEmoji, shortTitle, description, rationale,
+    /// keyQuestions}. The deterministic parts of the Slack Block Kit message (tender id, value,
+    /// deadline, region, recommendation label/emoji) are assembled in HandoffStage from
+    /// TenderDetail/the verdict directly, not generated here — see PromptBook.HandoffSystemPrompt's
+    /// doc comment.</summary>
+    public static readonly JsonElement HandoffBrief = JsonDocument.Parse(
+        """
+        {
+          "type": "object",
+          "properties": {
+            "categoryEmoji": { "type": "string" },
+            "shortTitle": { "type": "string" },
+            "description": { "type": "string" },
+            "rationale": { "type": "string" },
+            "keyQuestions": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["categoryEmoji", "shortTitle", "description", "rationale", "keyQuestions"],
+          "additionalProperties": false
+        }
+        """).RootElement.Clone();
+
+    /// <summary>Stage 6 (self-improvement) output: {targetPrompt, proposedPromptText,
+    /// justification, citedTenderIds}. See PromptBook.AnalysisSystemPrompt.</summary>
+    public static readonly JsonElement PromptProposal = JsonDocument.Parse(
+        """
+        {
+          "type": "object",
+          "properties": {
+            "targetPrompt": { "type": "string", "enum": ["triage", "verifier", "handoff"] },
+            "proposedPromptText": { "type": "string" },
+            "justification": { "type": "string" },
+            "citedTenderIds": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": ["targetPrompt", "proposedPromptText", "justification", "citedTenderIds"],
+          "additionalProperties": false
+        }
+        """).RootElement.Clone();
 }

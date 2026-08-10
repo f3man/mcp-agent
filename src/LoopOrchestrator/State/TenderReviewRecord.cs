@@ -14,7 +14,13 @@ public sealed record TenderReviewRecord(
     string? EligibilityRationale,
     DateTimeOffset? HandoffSentAt,
     string? HumanDecision,      // Pending | Bid | NoBid
-    string? Notes);
+    string? Notes,
+    // Trailing optional — added for the hill-climbing/self-improvement loop (see Analysis/) so
+    // every existing positional call site keeps compiling unchanged. HumanDecision was previously
+    // written once as "Pending" and never updated again; these two fields are what actually get
+    // set when a human clicks a decision link from the Slack brief (see HandoffStage/Program.cs).
+    DateTimeOffset? HumanDecidedAt = null,
+    string? HumanDecisionNote = null);
 
 /// <summary>Status values a TenderReviewRecord can hold — kept as constants rather than an enum
 /// since the state store persists them as plain strings (Azure Table Storage has no enum type).</summary>

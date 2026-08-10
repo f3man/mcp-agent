@@ -26,6 +26,10 @@ public static class LoopTelemetry
 
     public static Activity? StartRunActivity() => Source.StartActivity("loop-run", ActivityKind.Internal);
 
+    /// <summary>Root span for one Analysis/AnalysisRunner.cs pass — the self-improvement
+    /// ("hill-climbing") outer loop, a separate, much-less-frequent trace root from loop-run.</summary>
+    public static Activity? StartAnalysisRunActivity() => Source.StartActivity("analysis-run", ActivityKind.Internal);
+
     public static async Task<T> TraceStageAsync<T>(string stageName, string? tenderId, Func<Task<T>> action)
     {
         using var activity = Source.StartActivity(stageName, ActivityKind.Internal);

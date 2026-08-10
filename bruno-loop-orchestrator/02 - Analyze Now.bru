@@ -1,0 +1,17 @@
+meta {
+  name: 02 - Analyze Now
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/analyze-now
+  body: none
+  auth: none
+}
+
+docs {
+  Triggers the self-improvement ("hill-climbing") outer loop immediately, instead of waiting
+  for ANALYSIS_INTERVAL_HOURS (168h/weekly by default). 202 Accepted if started, 409 Conflict
+  if one's already running.
+}

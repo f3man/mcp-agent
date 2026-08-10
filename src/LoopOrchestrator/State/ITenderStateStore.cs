@@ -20,4 +20,15 @@ public interface ITenderStateStore
     Task<DateTimeOffset?> GetLastSuccessfulRunAtAsync(CancellationToken cancellationToken);
 
     Task SetLastSuccessfulRunAtAsync(DateTimeOffset timestamp, CancellationToken cancellationToken);
+
+    /// <summary>Full records with FirstSeenAt >= since — for Analysis/AnalysisRunner.cs, which
+    /// needs actual verdicts/rationale/citedClause/HumanDecision, not just ids. PoC-scale (~150
+    /// rows), so a property-range filter within the single existing partition is fine.</summary>
+    Task<List<TenderReviewRecord>> GetRecentAsync(DateTimeOffset since, CancellationToken cancellationToken);
+
+    Task UpsertProposalAsync(PromptProposalRecord proposal, CancellationToken cancellationToken);
+
+    /// <summary>Most recent proposals first, for GET /proposals and for AnalysisRunner to avoid
+    /// re-proposing something already tried.</summary>
+    Task<List<PromptProposalRecord>> GetProposalsAsync(int take, CancellationToken cancellationToken);
 }

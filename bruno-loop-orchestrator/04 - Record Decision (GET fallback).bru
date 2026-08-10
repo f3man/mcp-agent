@@ -1,0 +1,21 @@
+meta {
+  name: 04 - Record Decision (GET fallback)
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/decisions/{{tenderId}}/{{decision}}
+  body: none
+  auth: none
+}
+
+docs {
+  Manual/fallback decision-recording path — same DecisionUpdater logic the real Slack button
+  clicks use, reachable directly (e.g. a plain clickable link, or this request) without needing
+  Slack interactivity configured at all.
+
+  {{decision}} must be "bid" or "nobid" (case-insensitive per DecisionUpdater.ParseCanonicalDecision).
+  {{tenderId}} must already have a TenderReviewRecord (went through a real Handoff) — 404
+  otherwise.
+}

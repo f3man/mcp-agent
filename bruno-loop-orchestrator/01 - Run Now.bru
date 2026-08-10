@@ -1,0 +1,17 @@
+meta {
+  name: 01 - Run Now
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/run-now
+  body: none
+  auth: none
+}
+
+docs {
+  Triggers one loop run (Discover → Classify → Verify → Persist → Handoff) immediately,
+  instead of waiting for LOOP_INTERVAL_MINUTES. 202 Accepted if a run was started, 409
+  Conflict if one's already in progress.
+}

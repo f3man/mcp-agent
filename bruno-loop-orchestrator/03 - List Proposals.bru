@@ -1,0 +1,16 @@
+meta {
+  name: 03 - List Proposals
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/proposals
+  body: none
+  auth: none
+}
+
+docs {
+  Returns up to 20 most recent prompt-improvement proposals from the self-improvement outer
+  loop. Also a handy sanity check that the service is up and the state store is reachable.
+}

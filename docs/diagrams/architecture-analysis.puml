@@ -1,0 +1,65 @@
+@startuml architecture-analysis
+!theme plain
+title Tender Watch — Self-improvement ("hill-climbing") outer loop
+
+skinparam componentStyle rectangle
+skinparam wrapWidth 200
+skinparam maxMessageSize 200
+
+actor "Weekly timer\n(168h) /\nPOST /analyze-now" as Trigger
+actor "Human reviewer\n(GET /proposals)" as Human
+
+package "loop-orchestrator — Analysis subsystem" {
+  component "AnalysisBackgroundWorker" as Worker
+  component "AnalysisRunner\n(finds verdict/human\ndisagreements → proposes\na prompt revision)" as Runner
+  component "PromptGuardrails\n(pure: rejects a proposal that\ndrops a required safety phrase)" as Guardrails
+}
+
+package "Shared with the main loop\n(see architecture-components.puml)" {
+  component "ITenderStateStore\n(TableStorageStateStore)" as StateStore
+  component "AnthropicClient" as Anthropic
+  component "SlackNotifier" as Slack
+}
+
+Trigger --> Worker : TryRunOnceAsync()
+Worker --> Runner : RunAsync()
+
+Runner --> StateStore : GetRecentAsync(since)\n→ resolved handoffs\n(HandedOff + a human clicked Bid/NoBid)
+
+note right of Runner
+  IsDisagreement(): "uncertain" but human
+  bid, or "eligible" but human declined.
+  Never proposes from a single anecdote —
+  needs ≥ MinDisagreementsForProposal
+  before spending an LLM call at all.
+end note
+
+Runner --> Anthropic : propose a prompt revision\n(target prompt + justification +\ncited tender IDs)
+
+Runner --> Guardrails : IsSafe(targetPrompt, proposedText)
+note right of Guardrails
+  Required-substring check per prompt —
+  e.g. verifier must still contain
+  "citedClause" / "Never invent a
+  requirement" / "uncertain" — deliberately
+  paired with, not a substitute for,
+  the human review gate below.
+end note
+
+Runner --> StateStore : UpsertProposalAsync\n(Status = Proposed or\nRejectedByGuardrail)
+
+Runner --> Slack : notify human, only if guardrail passed\n(target prompt, justification,\nproposed replacement text)
+
+note right of Slack
+  NOT applied automatically — this class
+  never writes to PromptBook.cs itself.
+  A human must paste the approved text
+  in manually. If the guardrail rejected
+  the proposal instead, it's persisted
+  for audit and this Slack call never
+  happens.
+end note
+
+Human --> StateStore : reviews via GET /proposals\n(up to 20 most recent)
+
+@enduml

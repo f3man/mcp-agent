@@ -10,8 +10,8 @@ public interface ICompanyProfileService
 }
 
 /// <summary>
-/// Loads data/company-profile.json (repo root, not under src/McpServer) and caches the parsed
-/// result in memory — it's static PoC data, no need to re-read per call.
+/// Loads data/company-profile.json and caches the parsed result in memory — it's static PoC
+/// data, no need to re-read per call.
 /// </summary>
 public sealed class CompanyProfileService : ICompanyProfileService
 {
@@ -22,17 +22,23 @@ public sealed class CompanyProfileService : ICompanyProfileService
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private CompanyProfileData? _cached;
 
-    public CompanyProfileService(IHostEnvironment env, IConfiguration configuration, ILogger<CompanyProfileService> logger)
+    public CompanyProfileService(IConfiguration configuration, ILogger<CompanyProfileService> logger)
     {
         _logger = logger;
 
         // COMPANY_PROFILE_PATH is an optional escape hatch, not part of the documented config
-        // table — the documented default is data/company-profile.json at the repo root, resolved
-        // relative to the web project's content root (src/McpServer/../../data/...).
+        // table — the documented default resolves relative to AppContext.BaseDirectory (the
+        // running assembly's own directory), NOT IHostEnvironment.ContentRootPath: the latter
+        // is the process's working directory at startup, which is the *source* project
+        // directory locally (dotnet run) but the container's WORKDIR when deployed — the two
+        // environments disagree on where "../../data" even points, and the repo's data/ folder
+        // is never copied into a container image anyway. McpServer.csproj instead bundles
+        // data/company-profile.json into this project's own build/publish output (see its
+        // <Content Include> item), which AppContext.BaseDirectory finds consistently everywhere.
         var overridePath = configuration["COMPANY_PROFILE_PATH"];
         _profilePath = !string.IsNullOrWhiteSpace(overridePath)
             ? Path.GetFullPath(overridePath)
-            : Path.GetFullPath(Path.Combine(env.ContentRootPath, "..", "..", "data", "company-profile.json"));
+            : Path.Combine(AppContext.BaseDirectory, "data", "company-profile.json");
     }
 
     public async Task<CompanyProfileData> GetAsync(CancellationToken cancellationToken)

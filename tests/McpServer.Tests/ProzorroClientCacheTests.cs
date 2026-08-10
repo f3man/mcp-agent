@@ -87,6 +87,40 @@ public class ProzorroClientCacheTests
         Assert.Equal("fallback text", detail.EligibilityText);
     }
 
+    [Fact]
+    public async Task GetTenderAsync_Found_MapsNewFields_EndToEnd()
+    {
+        // Real shape confirmed live against https://public.api.openprocurement.org/api/2.5.
+        var handler = new StubHttpMessageHandler(_ => Json("""
+            {"data":{
+              "id":"t1","title":"Test tender","status":"active.tendering","description":"fallback text",
+              "tenderID":"UA-2020-03-17-000090-a",
+              "procurementMethod":"open",
+              "mainProcurementCategory":"services",
+              "items":[{
+                "id":"item-1","description":"Комп'ютерна техніка",
+                "unit":{"name":"штука","code":"H87"},
+                "quantity":3.0,
+                "deliveryAddress":{"region":"Одеська область","locality":"Одеса"}
+              }]
+            }}
+            """));
+        var client = CreateClient(handler, TimeSpan.FromMinutes(5));
+
+        var detail = await client.GetTenderAsync("t1", CancellationToken.None);
+
+        Assert.Equal("UA-2020-03-17-000090-a", detail.TenderId);
+        Assert.Equal("open", detail.ProcurementMethod);
+        Assert.Equal("services", detail.MainProcurementCategory);
+        var item = Assert.Single(detail.Items);
+        Assert.Equal("item-1", item.Id);
+        Assert.Equal("Комп'ютерна техніка", item.Description);
+        Assert.Equal("штука", item.Unit!.Name);
+        Assert.Equal(3.0, item.Quantity);
+        Assert.Equal("Одеська область", item.DeliveryAddress!.Region);
+        Assert.Equal("Одеса", item.DeliveryAddress.Locality);
+    }
+
     private static ProzorroClient CreateClient(StubHttpMessageHandler handler, TimeSpan ttl)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://example.test/api/2.5/") };

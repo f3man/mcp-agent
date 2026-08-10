@@ -91,6 +91,49 @@ public sealed class TableStorageStateStore(TableServiceClient tableServiceClient
             new RunStateEntity { LastSuccessfulRunAt = timestamp }, TableUpdateMode.Replace, cancellationToken);
     }
 
+    public async Task<List<TenderReviewRecord>> GetRecentAsync(DateTimeOffset since, CancellationToken cancellationToken)
+    {
+        var table = await GetTableAsync(cancellationToken);
+        var records = new List<TenderReviewRecord>();
+
+        var pages = table.QueryAsync<TenderReviewEntity>(
+            e => e.PartitionKey == TenderReviewEntity.PartitionKeyValue && e.FirstSeenAt >= since,
+            cancellationToken: cancellationToken);
+
+        await foreach (var entity in pages)
+        {
+            records.Add(TenderReviewMapper.ToRecord(entity));
+        }
+
+        return records;
+    }
+
+    public async Task UpsertProposalAsync(PromptProposalRecord proposal, CancellationToken cancellationToken)
+    {
+        var table = await GetTableAsync(cancellationToken);
+        var entity = PromptProposalMapper.ToEntity(proposal);
+        await table.UpsertEntityAsync(entity, TableUpdateMode.Replace, cancellationToken);
+    }
+
+    public async Task<List<PromptProposalRecord>> GetProposalsAsync(int take, CancellationToken cancellationToken)
+    {
+        var table = await GetTableAsync(cancellationToken);
+        var proposals = new List<PromptProposalRecord>();
+
+        var pages = table.QueryAsync<PromptProposalEntity>(
+            e => e.PartitionKey == PromptProposalEntity.PartitionKeyValue,
+            cancellationToken: cancellationToken);
+
+        await foreach (var entity in pages)
+        {
+            proposals.Add(PromptProposalMapper.ToRecord(entity));
+        }
+
+        // No server-side ORDER BY in Table Storage — client-side sort is fine at this scale
+        // (a handful of proposals, not thousands).
+        return proposals.OrderByDescending(p => p.CreatedAt).Take(take).ToList();
+    }
+
     private async Task<TableClient> GetTableAsync(CancellationToken cancellationToken)
     {
         if (_initialized) return _tableClient!;

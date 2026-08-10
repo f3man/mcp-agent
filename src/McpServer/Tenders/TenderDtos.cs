@@ -31,6 +31,20 @@ public sealed record TenderSummary(
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("sourceUrl")] string SourceUrl);
 
+public sealed record UnitInfo(
+    [property: JsonPropertyName("name")] string? Name);
+
+public sealed record DeliveryAddressInfo(
+    [property: JsonPropertyName("region")] string? Region,
+    [property: JsonPropertyName("locality")] string? Locality);
+
+public sealed record TenderItemInfo(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("description")] string? Description,
+    [property: JsonPropertyName("unit")] UnitInfo? Unit,
+    [property: JsonPropertyName("quantity")] double? Quantity,
+    [property: JsonPropertyName("deliveryAddress")] DeliveryAddressInfo? DeliveryAddress);
+
 public sealed record TenderDetail(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("title")] string Title,
@@ -41,4 +55,11 @@ public sealed record TenderDetail(
     [property: JsonPropertyName("tenderPeriod")] TenderPeriodInfo TenderPeriod,
     [property: JsonPropertyName("status")] string Status,
     [property: JsonPropertyName("sourceUrl")] string SourceUrl,
-    [property: JsonPropertyName("eligibilityText")] string EligibilityText);
+    [property: JsonPropertyName("eligibilityText")] string EligibilityText,
+    // Prozorro's own human-readable official tender number (e.g. "UA-2020-03-17-000090-a") —
+    // distinct from Id above, which is the internal hex id used for SourceUrl. Genuinely new
+    // information for a human, not a duplicate of an existing field.
+    [property: JsonPropertyName("tenderId")] string? TenderId,
+    [property: JsonPropertyName("procurementMethod")] string? ProcurementMethod,
+    [property: JsonPropertyName("mainProcurementCategory")] string? MainProcurementCategory,
+    [property: JsonPropertyName("items")] IReadOnlyList<TenderItemInfo> Items);

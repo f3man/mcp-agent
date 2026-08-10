@@ -1,10 +1,14 @@
 using McpServer.Auth;
 using McpServer.CompanyProfile;
 using McpServer.Tenders;
+using Microsoft.Extensions.Http.Resilience;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.AddServiceDefaults(); // OTel + health checks + resilience, one line — doesn't touch the
-                               // network, so it doesn't compromise the fail-fast check below.
+builder.AddServiceDefaults(); // OTel + health checks + service discovery, one line — doesn't
+                               // touch the network, so it doesn't compromise the fail-fast check
+                               // below. Resilience is added explicitly per HttpClient instead
+                               // (see the AddHttpClient<IProzorroClient, ProzorroClient> call
+                               // below) — not a blanket ConfigureHttpClientDefaults default.
 
 // 1) Fail fast: refuse to start unauthenticated. Checked before builder.Build() so a
 // misconfigured deployment never binds a port or touches the network.
@@ -33,7 +37,7 @@ builder.Services.AddHttpClient<IProzorroClient, ProzorroClient>((sp, client) =>
     var options = sp.GetRequiredService<ProzorroClientOptions>();
     client.BaseAddress = new Uri(options.BaseUrl.TrimEnd('/') + "/"); // trailing slash: relative request URIs depend on it
     client.DefaultRequestHeaders.UserAgent.ParseAdd("TenderWatch-McpServer/1.0 (+https://github.com/example/mcp-agent)");
-});
+}).AddStandardResilienceHandler();
 builder.Services.AddSingleton<ICompanyProfileService, CompanyProfileService>();
 
 builder.Services

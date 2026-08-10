@@ -29,11 +29,18 @@ public class PromptTemplateTests
     }
 
     [Fact]
+    public void AnalysisPrompt_MatchesPromptBookDoc()
+    {
+        AssertPromptMatchesDoc(PromptBook.AnalysisSystemPrompt, PromptBook.AnalysisVersion, codeBlockIndex: 3);
+    }
+
+    [Fact]
     public void EachPrompt_StartsWithItsVersionCommentLine()
     {
         Assert.StartsWith("# " + PromptBook.TriageVersion, PromptBook.TriageSystemPrompt);
         Assert.StartsWith("# " + PromptBook.VerifierVersion, PromptBook.VerifierSystemPrompt);
         Assert.StartsWith("# " + PromptBook.HandoffVersion, PromptBook.HandoffSystemPrompt);
+        Assert.StartsWith("# " + PromptBook.AnalysisVersion, PromptBook.AnalysisSystemPrompt);
     }
 
     private static void AssertPromptMatchesDoc(string constPrompt, string expectedVersion, int codeBlockIndex)
@@ -56,7 +63,7 @@ public class PromptTemplateTests
         // Each of the three "**System prompt** (`# ... vN`):" sections is followed by one fenced
         // code block — those are the actual prompt bodies, in triage/verifier/handoff order.
         var matches = Regex.Matches(markdown, @"\*\*System prompt\*\*[^\n]*:\n```\n(.*?)\n```", RegexOptions.Singleline);
-        Assert.Equal(3, matches.Count);
+        Assert.Equal(4, matches.Count);
         return matches.Select(m => m.Groups[1].Value).ToList();
     }
 

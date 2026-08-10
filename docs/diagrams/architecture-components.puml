@@ -1,0 +1,106 @@
+@startuml architecture-components
+!theme plain
+title Tender Watch — Component Architecture (agent ↔ RAG ↔ memory ↔ external APIs)
+
+skinparam componentStyle rectangle
+skinparam wrapWidth 200
+skinparam maxMessageSize 200
+
+actor "Timer /\nPOST /run-now" as Trigger
+actor "Slack user\n(clicks Bid / No-Bid)" as SlackUser
+
+package "loop-orchestrator (the Agent)" {
+  component "LoopRunner\n(Discover → Classify → Verify →\nProcurementMethodPolicy filter →\nPersist → Handoff)" as Runner
+  component "IMcpTenderClient\n(McpTenderClient)" as McpClient
+  component "AnthropicClient\n(structured JSON output)" as Anthropic
+  component "SlackNotifier\n(outgoing: Block Kit blocks\nwith interactive buttons)" as Slack
+  component "SlackInteractionHandler\n(POST /slack/interactions —\nHMAC signature verification)" as SlackInteraction
+  component "DecisionUpdater\n(pure: applies Bid/NoBid)" as DecisionUpdater
+  component "ITenderStateStore\n(TableStorageStateStore)" as StateStore
+
+  package "RAG" {
+    component "IEligibilityIndex\n(InMemoryEligibilityIndex)" as Index
+    component "MarkdownChunker" as Chunker
+    component "IEmbeddingClient\n(OpenAiEmbeddingClient)" as Embedder
+  }
+}
+
+package "mcp-server" {
+  component "MCP tools\n(list_tenders, search_tenders,\nget_tender — incl. tenderId /\nprocurementMethod / items[],\nget_company_profile)" as McpTools
+  component "CompanyProfileService" as ProfileSvc
+}
+
+package "Memory" {
+  database "Azure Table Storage\n\"TenderReview\" table\n(Azurite locally)\npartitions: run-state |\ntender reviews | prompt proposals" as Table
+}
+
+package "External APIs" {
+  cloud "Prozorro public\nprocurement API" as Prozorro
+  cloud "Anthropic Messages API\n(claude-haiku-4-5,\nstructured outputs)" as AnthropicApi
+  cloud "OpenAI Embeddings API\n(text-embedding-3-small)" as OpenAiApi
+  cloud "Slack\n(incoming webhook +\nInteractivity & Shortcuts)" as SlackApi
+}
+
+file "data/qualification-docs/*.md" as QualDocs
+file "data/company-profile.json" as ProfileFile
+
+Trigger --> Runner : triggers one pass
+
+Runner --> McpClient : Discover / Verify\n(tender data)
+McpClient --> McpTools : MCP Streamable HTTP\n(X-Api-Key)
+McpTools --> Prozorro : HTTPS
+McpTools --> ProfileSvc
+ProfileSvc --> ProfileFile : reads at request time
+
+Runner --> Index : Verify\n(query eligibility snippets)
+Index --> Chunker : chunk at startup
+Chunker --> QualDocs : reads once
+Index --> Embedder : embed chunks + query
+Embedder --> OpenAiApi : HTTPS
+
+Runner --> Anthropic : Classify / Verify / Handoff\n(one call per stage)
+Anthropic --> AnthropicApi : HTTPS
+
+Runner --> StateStore : Persist +\nseen-tender-ID idempotency guard
+StateStore --> Table : Azure.Data.Tables SDK
+
+Runner --> Slack : Handoff\n(uncertain / high-value eligible,\nnot procurementMethod=limited)
+Slack --> SlackApi : HTTPS POST\n{text, blocks}
+
+SlackUser --> SlackApi : clicks a button
+SlackApi --> SlackInteraction : POST /slack/interactions\n(signed block_actions payload)
+SlackInteraction --> DecisionUpdater : ApplyDecision(existing, bid/nobid)
+SlackInteraction --> StateStore : UpsertAsync(HumanDecision)
+SlackInteraction --> SlackApi : POST response_url\n(hide buttons, Ukrainian\nconfirmation line — best-effort)
+
+note right of Runner
+  Every stage + every LLM call is
+  wrapped in its own OpenTelemetry
+  Activity (TenderWatch.LoopOrchestrator.Stages),
+  exported to the Aspire Dashboard /
+  Azure Monitor as one connected trace
+  per run — nested MCP tool spans
+  come along for free via W3C
+  trace-context propagation over HTTP.
+end note
+
+note right of SlackInteraction
+  Fails closed (503) if SLACK_SIGNING_SECRET
+  is unset — never accepts an unverified
+  request. Signature = HMAC-SHA256 of
+  "v0:{timestamp}:{rawBody}", rejects
+  requests older than 5 minutes.
+end note
+
+note bottom of StateStore
+  The self-improvement ("hill-climbing")
+  outer loop — AnalysisBackgroundWorker,
+  AnalysisRunner, PromptGuardrails — reads
+  from and writes to this same store,
+  and reuses AnthropicClient / SlackNotifier
+  above. Kept out of this diagram for
+  readability — see
+  architecture-analysis.puml.
+end note
+
+@enduml

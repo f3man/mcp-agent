@@ -1,0 +1,23 @@
+meta {
+  name: 05 - Record Decision (POST)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/decisions/{{tenderId}}
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "decision": "{{decision}}",
+    "note": "demo via Bruno"
+  }
+}
+
+docs {
+  Same as 04, but with a note attached. {{tenderId}} must already have a TenderReviewRecord
+  (went through a real Handoff) — 404 otherwise.
+}

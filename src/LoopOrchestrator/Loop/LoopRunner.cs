@@ -131,6 +131,21 @@ public sealed class LoopRunner(
 
         var verifyResult = await verifyStage.RunAsync(tender.Id, cancellationToken);
 
+        // "limited" procurement method tenders can't realistically be bid on by an outside
+        // supplier regardless of eligibility — checked here, right after Verify (the earliest
+        // point TenderDetail.ProcurementMethod is available), before any persist for this tender
+        // and before ever reaching Handoff, so no LLM call or Slack noise is spent on one.
+        if (ProcurementMethodPolicy.IsExcluded(verifyResult.TenderDetail.ProcurementMethod))
+        {
+            await persistStage.RunAsync(
+                new TenderReviewRecord(
+                    tender.Id, firstSeenAt, TenderReviewStatus.Skipped, classifyResult.RelevanceScore,
+                    verifyResult.Verdict, verifyResult.Rationale, HandoffSentAt: null, HumanDecision: null,
+                    Notes: $"Excluded — procurementMethod={verifyResult.TenderDetail.ProcurementMethod} (invite-only, not biddable)."),
+                cancellationToken);
+            return TenderReviewStatus.Skipped;
+        }
+
         // Interim persist right after Verify, before the Handoff decision — matches the spec's
         // stage ordering (Persist, then Handoff). The final persist below may overwrite Status.
         await persistStage.RunAsync(

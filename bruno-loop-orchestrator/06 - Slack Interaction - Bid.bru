@@ -1,0 +1,89 @@
+meta {
+  name: 06 - Slack Interaction - Bid
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/slack/interactions
+  body: text
+  auth: none
+}
+
+headers {
+  Content-Type: application/x-www-form-urlencoded
+  X-Slack-Signature: {{slackSignature}}
+  X-Slack-Request-Timestamp: {{slackTimestamp}}
+}
+
+body:text {
+  {{slackRawBody}}
+}
+
+script:pre-request {
+  const crypto = require('crypto');
+
+  const tenderId = bru.getVar('tenderId');
+  const decision = 'bid'; // fixed for this request — see "07 - Slack Interaction - No Bid" for the other one
+  const actionId = `tender_${decision}_action`;
+  const value = `${decision}_${tenderId}`;
+
+  // Mirrors the real shape SlackInteractionHandler deserializes into SlackBlockActionsPayload,
+  // and the blocks HandoffStage.BuildBlocks actually sends (buttons included, so the handler's
+  // "strip the actions block" logic has something real to strip).
+  const payload = {
+    actions: [{ action_id: actionId, value: value }],
+    // Fake/unreachable on purpose — updating the original message via response_url is
+    // best-effort in SlackInteractionHandler (wrapped in try/catch), so this doesn't need to
+    // be a real Slack URL for the decision itself to record successfully.
+    response_url: 'https://hooks.slack.com/actions/T000/0000/fake-demo-url',
+    message: {
+      blocks: [
+        { type: 'header', text: { type: 'plain_text', text: '🏗️ Новий тендер: демо' } },
+        { type: 'section', text: { type: 'mrkdwn', text: 'Демо-тендер для тестування через Bruno' } },
+        { type: 'divider' },
+        {
+          type: 'actions',
+          elements: [
+            { type: 'button', text: { type: 'plain_text', text: '✅ Подати заявку' }, style: 'primary', action_id: 'tender_bid_action', value: `bid_${tenderId}` },
+            { type: 'button', text: { type: 'plain_text', text: '❌ Відмовитися' }, style: 'danger', action_id: 'tender_nobid_action', value: `nobid_${tenderId}` },
+          ],
+        },
+      ],
+    },
+  };
+
+  // Slack's real wire format: application/x-www-form-urlencoded with one field, "payload",
+  // whose value is URL-encoded JSON — see SlackInteractionHandler.ExtractPayloadField.
+  const rawBody = `payload=${encodeURIComponent(JSON.stringify(payload))}`;
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+
+  const signingSecret = bru.getEnvVar('slackSigningSecret');
+  if (!signingSecret) {
+    throw new Error('slackSigningSecret is not set in this environment (Bruno secret var) — ' +
+      'set it to the same value as Parameters:slack-signing-secret in dotnet user-secrets.');
+  }
+
+  // Exactly mirrors SlackInteractionHandler.IsValidSignature's algorithm.
+  const baseString = `v0:${timestamp}:${rawBody}`;
+  const signature = 'v0=' + crypto.createHmac('sha256', signingSecret).update(baseString).digest('hex');
+
+  bru.setVar('slackRawBody', rawBody);
+  bru.setVar('slackTimestamp', timestamp);
+  bru.setVar('slackSignature', signature);
+}
+
+docs {
+  Simulates a real Slack "✅ Подати заявку" button click against POST /slack/interactions,
+  with a genuinely valid HMAC-SHA256 signature (computed in the pre-request script — see
+  SlackInteractionHandler.IsValidSignature for the algorithm this mirrors).
+
+  Requires:
+  - {{tenderId}} (environment var) set to a tender that already has a TenderReviewRecord
+    (went through a real Handoff) — otherwise 404.
+  - {{slackSigningSecret}} (environment secret var) set to the same value as
+    Parameters:slack-signing-secret in dotnet user-secrets (src/AppHost).
+
+  Expect: 200 OK, and the tender's HumanDecision becomes "Bid" (check via
+  "03 - List Proposals" or the state store directly).
+}

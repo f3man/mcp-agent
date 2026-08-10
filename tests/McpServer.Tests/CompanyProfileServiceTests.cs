@@ -1,7 +1,5 @@
 using McpServer.CompanyProfile;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.FileProviders;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol;
 
@@ -87,18 +85,9 @@ public class CompanyProfileServiceTests
 
     private static CompanyProfileService CreateService(string profilePathOverride)
     {
-        var env = new FakeHostEnvironment();
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["COMPANY_PROFILE_PATH"] = profilePathOverride })
             .Build();
-        return new CompanyProfileService(env, configuration, NullLogger<CompanyProfileService>.Instance);
-    }
-
-    private sealed class FakeHostEnvironment : IHostEnvironment
-    {
-        public string ApplicationName { get; set; } = "McpServer.Tests";
-        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
-        public string ContentRootPath { get; set; } = Path.GetTempPath();
-        public string EnvironmentName { get; set; } = "Development";
+        return new CompanyProfileService(configuration, NullLogger<CompanyProfileService>.Instance);
     }
 }

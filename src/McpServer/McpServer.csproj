@@ -19,4 +19,12 @@
     <ProjectReference Include="..\ServiceDefaults\ServiceDefaults.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Bundled into this project's own output/publish directory (and therefore into its
+         container image) so CompanyProfileService can resolve it relative to
+         AppContext.BaseDirectory in every environment — local dev, container, deployed. -->
+    <Content Include="../../data/company-profile.json" Link="data/company-profile.json"
+              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
